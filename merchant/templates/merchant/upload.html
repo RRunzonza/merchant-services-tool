@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Merchant Services Digital Platform</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+  body {
+    min-height:100vh;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.84),rgba(255,255,255,0.84)),
+      url("https://images.unsplash.com/photo-1715635845608-957c4a49500f?q=80&w=1920&auto=format&fit=crop");
+    background-size:cover; background-position:center;
+    background-repeat:no-repeat; background-attachment:fixed;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .upload-card {
+    background:rgba(255,255,255,0.96); border-radius:20px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.18); padding:2.5rem 2rem;
+    max-width:600px; width:100%;
+  }
+  .brand-title { color:#0d47a1; font-size:1.9rem; font-weight:800; }
+  .brand-sub   { color:#1565c0; font-size:1rem; }
+  .caption     { color:#555; font-size:.9rem; }
+  .drop-zone {
+    border:2px solid #90caf9; border-radius:12px;
+    padding:1.5rem; text-align:center; background:#f0f7ff;
+    transition:border-color .2s;
+  }
+  .drop-zone:hover { border-color:#1565c0; }
+  .drop-zone .bi { font-size:2rem; color:#1565c0; }
+  .file-info { background:#e3f2fd; border-radius:8px; padding:.5rem 1rem; font-size:.88rem; color:#0d47a1; margin-top:.5rem; }
+  .btn-submit {
+    background:linear-gradient(135deg,#1565c0,#0d47a1); color:#fff;
+    border:none; border-radius:10px; font-weight:700; font-size:1rem;
+    padding:.75rem 2rem; box-shadow:0 4px 14px rgba(13,71,161,.35);
+    transition:box-shadow .2s;
+  }
+  .btn-submit:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-submit:not(:disabled):hover { box-shadow:0 6px 20px rgba(13,71,161,.5); color:#fff; }
+  label.form-label { color:#0d47a1; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="upload-card">
+  <div class="text-center mb-4">
+    <div class="brand-title">Merchant Services</div>
+    <div class="brand-sub fw-semibold">Digital Platform</div>
+    <p class="caption mt-1">Let's Digitise — upload your daily transaction files to get started.</p>
+  </div>
+
+  <hr>
+
+  {% if errors %}
+    {% for e in errors %}
+    <div class="alert alert-danger py-2">{{ e }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if form.non_field_errors %}
+    {% for e in form.non_field_errors %}
+    <div class="alert alert-danger py-2">{{ e }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" id="upload-form">
+    {% csrf_token %}
+
+    <div class="mb-3">
+      <label class="form-label">Upload ZWG Transactions</label>
+      <div class="drop-zone">
+        <i class="bi bi-file-earmark-excel"></i>
+        <p class="mb-1 text-muted" style="font-size:.88rem;">Excel file (.xlsx or .xls)</p>
+        {{ form.zwg_file }}
+        <div id="zwg-info" class="file-info mt-2 d-none"></div>
+      </div>
+      {% if form.zwg_file.errors %}
+        <div class="text-danger small mt-1">{{ form.zwg_file.errors.0 }}</div>
+      {% endif %}
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Upload USD Transactions</label>
+      <div class="drop-zone">
+        <i class="bi bi-file-earmark-excel"></i>
+        <p class="mb-1 text-muted" style="font-size:.88rem;">Excel file (.xlsx or .xls)</p>
+        {{ form.usd_file }}
+        <div id="usd-info" class="file-info mt-2 d-none"></div>
+      </div>
+      {% if form.usd_file.errors %}
+        <div class="text-danger small mt-1">{{ form.usd_file.errors.0 }}</div>
+      {% endif %}
+    </div>
+
+    <div class="text-center mt-4">
+      <button type="submit" class="btn btn-submit" id="submit-btn" disabled>
+        <i class="bi bi-cloud-upload"></i> Submit and Process
+      </button>
+    </div>
+  </form>
+
+  <div class="text-center mt-3">
+    <a href="/auto-reports/" style="color:#1565c0;font-size:.88rem;text-decoration:none;">
+      <i class="bi bi-lightning-charge-fill me-1"></i>Click here for Automatic Reports Generation
+    </a>
+  </div>
+</div>
+
+<script>
+  const zwgInput  = document.querySelector('[name="zwg_file"]');
+  const usdInput  = document.querySelector('[name="usd_file"]');
+  const submitBtn = document.getElementById('submit-btn');
+  const zwgInfo   = document.getElementById('zwg-info');
+  const usdInfo   = document.getElementById('usd-info');
+
+  zwgInput.className = 'form-control mt-2';
+  usdInput.className = 'form-control mt-2';
+
+  function updateSubmit() {
+    submitBtn.disabled = !(zwgInput.files.length && usdInput.files.length);
+  }
+
+  zwgInput.addEventListener('change', () => {
+    if (zwgInput.files[0]) {
+      zwgInfo.textContent = `✔ ${zwgInput.files[0].name} (${(zwgInput.files[0].size/1024).toFixed(1)} KB)`;
+      zwgInfo.classList.remove('d-none');
+    }
+    updateSubmit();
+  });
+
+  usdInput.addEventListener('change', () => {
+    if (usdInput.files[0]) {
+      usdInfo.textContent = `✔ ${usdInput.files[0].name} (${(usdInput.files[0].size/1024).toFixed(1)} KB)`;
+      usdInfo.classList.remove('d-none');
+    }
+    updateSubmit();
+  });
+
+  document.getElementById('upload-form').addEventListener('submit', () => {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing…';
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

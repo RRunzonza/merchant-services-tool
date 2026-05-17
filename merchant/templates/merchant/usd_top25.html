@@ -1,0 +1,103 @@
+{% extends "merchant/base.html" %}
+{% block title %}USD Weekly Top 25 — Merchant Services{% endblock %}
+
+{% block content %}
+<h2><i class="bi bi-currency-dollar me-2"></i>USD Weekly Top 25</h2>
+<hr>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<div class="section-card" style="max-width:620px;">
+  <h4 class="mb-1">Select Date Range</h4>
+  <p style="color:#a8d8f0;font-size:.88rem;margin-bottom:1rem;">
+    Enter any date range — including weeks that span across month boundaries.
+    All uploaded worksheets are searched automatically.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">From Date</label>
+        <input type="date" name="from_date" class="form-control"
+          value="{{ form.from_date.value|default:'' }}">
+        {% if form.from_date.errors %}
+          <div class="text-danger small mt-1">{{ form.from_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">To Date</label>
+        <input type="date" name="to_date" class="form-control"
+          value="{{ form.to_date.value|default:'' }}">
+        {% if form.to_date.errors %}
+          <div class="text-danger small mt-1">{{ form.to_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-merchant w-100" id="run-btn">
+          <i class="bi bi-search"></i> Run
+        </button>
+      </div>
+    </div>
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger mt-2 py-2">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+  </form>
+</div>
+
+{% if top25_error %}
+  <div class="alert alert-warning mt-3">{{ top25_error }}</div>
+{% endif %}
+
+{% if top25_results %}
+<div class="section-card mt-3">
+  <h4 class="mb-3" style="color:#FFD700;">
+    <i class="bi bi-currency-dollar me-2"></i>
+    USD Top 25 — {{ top25_results.from_date }} to {{ top25_results.to_date }}
+  </h4>
+
+  <div style="overflow-x:auto;border-radius:8px;margin-bottom:1rem;">
+    <table class="top25-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>CIF</th>
+          <th>Merchant Name</th>
+          <th>Revenue (USD)</th>
+          <th>Business Unit</th>
+          <th>Revenue %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in top25_results.rows %}
+        <tr>
+          <td style="color:#7a99b8;">{{ forloop.counter }}</td>
+          <td>{{ row.CIF }}</td>
+          <td>{{ row.MERCHANT_NAME }}</td>
+          <td>{{ row.Revenue|floatformat:2 }}</td>
+          <td>{{ row.BUSINESS_UNIT }}</td>
+          <td>{{ row.Revenue_Percentage }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if top25_results.has_download %}
+  <a href="{% url 'download_usd_top25_weekly' %}" class="btn btn-merchant btn-sm">
+    <i class="bi bi-download me-1"></i> Download USD Top 25 Report
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+  document.querySelector('form').addEventListener('submit', function() {
+    const btn = document.getElementById('run-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+  });
+</script>
+{% endblock %}

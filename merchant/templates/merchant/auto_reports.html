@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Automatic Reports Generation — Merchant Services</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+  body {
+    min-height:100vh;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.84),rgba(255,255,255,0.84)),
+      url("https://images.unsplash.com/photo-1715635845608-957c4a49500f?q=80&w=1920&auto=format&fit=crop");
+    background-size:cover; background-position:center;
+    background-repeat:no-repeat; background-attachment:fixed;
+    display:flex; align-items:flex-start; justify-content:center;
+    padding:2rem 1rem;
+  }
+  .upload-card {
+    background:rgba(255,255,255,0.96); border-radius:20px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.18); padding:2.5rem 2rem;
+    max-width:680px; width:100%;
+  }
+  .brand-title { color:#0d47a1; font-size:1.9rem; font-weight:800; }
+  .brand-sub   { color:#1565c0; font-size:1rem; }
+  .caption     { color:#555; font-size:.9rem; }
+  .drop-zone {
+    border:2px solid #90caf9; border-radius:12px;
+    padding:1.25rem; text-align:center; background:#f0f7ff;
+    transition:border-color .2s;
+  }
+  .drop-zone:hover { border-color:#1565c0; }
+  .drop-zone .bi { font-size:1.75rem; color:#1565c0; }
+  .file-info { background:#e3f2fd; border-radius:8px; padding:.4rem .9rem; font-size:.85rem; color:#0d47a1; margin-top:.5rem; }
+  .btn-submit {
+    background:linear-gradient(135deg,#1565c0,#0d47a1); color:#fff;
+    border:none; border-radius:10px; font-weight:700; font-size:1rem;
+    padding:.75rem 2rem; box-shadow:0 4px 14px rgba(13,71,161,.35);
+    transition:box-shadow .2s;
+  }
+  .btn-submit:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-submit:not(:disabled):hover { box-shadow:0 6px 20px rgba(13,71,161,.5); color:#fff; }
+  label.form-label { color:#0d47a1; font-weight:600; }
+  .section-divider { border-top:1px solid #e3f2fd; margin:1.5rem 0; }
+  .result-card {
+    background:#e8f5e9; border:1px solid #a5d6a7; border-radius:12px;
+    padding:1.25rem 1.5rem; margin-bottom:1.25rem;
+  }
+  .stat-row { display:flex; gap:2rem; flex-wrap:wrap; margin-top:.75rem; }
+  .stat-item { text-align:center; }
+  .stat-num  { font-size:1.6rem; font-weight:800; color:#0d47a1; }
+  .stat-lbl  { font-size:.75rem; color:#555; text-transform:uppercase; letter-spacing:.04em; }
+  .btn-dl-zwg {
+    background:linear-gradient(135deg,#e65100,#bf360c); color:#fff;
+    border:none; border-radius:10px; font-weight:700; padding:.65rem 1.5rem;
+    box-shadow:0 3px 10px rgba(198,40,40,.3); transition:box-shadow .2s;
+  }
+  .btn-dl-zwg:hover { box-shadow:0 5px 16px rgba(198,40,40,.5); color:#fff; }
+  .btn-dl-usd {
+    background:linear-gradient(135deg,#1b5e20,#2e7d32); color:#fff;
+    border:none; border-radius:10px; font-weight:700; padding:.65rem 1.5rem;
+    box-shadow:0 3px 10px rgba(27,94,32,.3); transition:box-shadow .2s;
+  }
+  .btn-dl-usd:hover { box-shadow:0 5px 16px rgba(27,94,32,.5); color:#fff; }
+  .btn-proceed {
+    background:linear-gradient(135deg,#4a148c,#6a1b9a); color:#fff;
+    border:none; border-radius:10px; font-weight:700; padding:.65rem 1.75rem;
+    box-shadow:0 3px 10px rgba(74,20,140,.3); transition:box-shadow .2s;
+  }
+  .btn-proceed:hover { box-shadow:0 5px 16px rgba(74,20,140,.5); color:#fff; }
+</style>
+</head>
+<body>
+<div class="upload-card">
+
+  <div class="text-center mb-3">
+    <div class="brand-title">⚡ Automatic Reports Generation</div>
+    <div class="brand-sub fw-semibold">Merchant Services — Digital Platform</div>
+  </div>
+
+  <a href="/" style="font-size:.85rem;color:#1565c0;text-decoration:none;">
+    <i class="bi bi-arrow-left me-1"></i>Back to Upload Page
+  </a>
+
+  <div class="section-divider"></div>
+
+  {% if errors %}
+    {% for e in errors %}
+    <div class="alert alert-danger py-2">{{ e }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if not has_results %}
+
+  <form method="post" enctype="multipart/form-data" id="auto-form">
+    {% csrf_token %}
+
+    {# B02 Files #}
+    <div class="mb-3">
+      <label class="form-label">
+        <i class="bi bi-file-earmark-binary me-1"></i>Upload B02 Reports
+      </label>
+      <div class="drop-zone">
+        <i class="bi bi-file-earmark-binary"></i>
+        <p class="mb-1 text-muted" style="font-size:.85rem;">Raw switch B02 files (.xls or .xlsx) — multiple allowed</p>
+        <input type="file" name="b02_files" id="b02-input" class="form-control mt-2"
+               accept=".xls,.xlsx" multiple>
+        <div id="b02-info" class="file-info mt-2 d-none"></div>
+      </div>
+    </div>
+
+    {# ZWG Report #}
+    <div class="mb-3">
+      <label class="form-label">
+        <i class="bi bi-file-earmark-excel me-1"></i>Upload ZWG Merchants Report
+      </label>
+      <div class="drop-zone">
+        <i class="bi bi-file-earmark-excel"></i>
+        <p class="mb-1 text-muted" style="font-size:.85rem;">ZWG All Merchants Report (.xlsx)</p>
+        <input type="file" name="zwg_report" id="zwg-input" class="form-control mt-2"
+               accept=".xls,.xlsx">
+        <div id="zwg-info" class="file-info mt-2 d-none"></div>
+      </div>
+    </div>
+
+    {# USD Report #}
+    <div class="mb-3">
+      <label class="form-label">
+        <i class="bi bi-file-earmark-excel me-1"></i>Upload USD Merchants Report
+      </label>
+      <div class="drop-zone">
+        <i class="bi bi-file-earmark-excel"></i>
+        <p class="mb-1 text-muted" style="font-size:.85rem;">USD All Merchants Report (.xlsx)</p>
+        <input type="file" name="usd_report" id="usd-input" class="form-control mt-2"
+               accept=".xls,.xlsx">
+        <div id="usd-info" class="file-info mt-2 d-none"></div>
+      </div>
+    </div>
+
+    <div class="text-center mt-4">
+      <button type="submit" class="btn btn-submit" id="submit-btn" disabled>
+        <i class="bi bi-lightning-charge-fill me-1"></i> Generate Reports
+      </button>
+    </div>
+  </form>
+
+  {% else %}
+
+  {# ── RESULTS ─────────────────────────────────────────────────────────────── #}
+  <div class="result-card">
+    <div style="font-size:1rem;font-weight:700;color:#1b5e20;margin-bottom:.5rem;">
+      <i class="bi bi-check-circle-fill me-2"></i>Reports Generated Successfully
+    </div>
+    <div class="stat-row">
+      <div class="stat-item">
+        <div class="stat-num">{{ b02_files_count }}</div>
+        <div class="stat-lbl">B02 File{{ b02_files_count|pluralize }} Processed</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ b02_tids }}</div>
+        <div class="stat-lbl">Unique Terminal{{ b02_tids|pluralize }} in B02</div>
+      </div>
+      <div class="stat-item" style="flex:1;min-width:160px;">
+        <div style="font-size:1rem;font-weight:700;color:#0d47a1;">{{ dates_processed }}</div>
+        <div class="stat-lbl">Date{{ dates_processed|length|pluralize }} Updated</div>
+      </div>
+    </div>
+
+    {% if zwg_stats %}
+    <div class="mt-3" style="font-size:.88rem;color:#37474f;">
+      <strong style="color:#e65100;">ZWG Report:</strong>
+      {{ zwg_stats.updated }} terminal{{ zwg_stats.updated|pluralize }} updated&nbsp;·&nbsp;
+      {{ zwg_stats.added }} new terminal{{ zwg_stats.added|pluralize }} inserted
+    </div>
+    {% endif %}
+    {% if usd_stats %}
+    <div class="mt-1" style="font-size:.88rem;color:#37474f;">
+      <strong style="color:#2e7d32;">USD Report:</strong>
+      {{ usd_stats.updated }} terminal{{ usd_stats.updated|pluralize }} updated&nbsp;·&nbsp;
+      {{ usd_stats.added }} new terminal{{ usd_stats.added|pluralize }} inserted
+    </div>
+    {% endif %}
+  </div>
+
+  {# Download buttons #}
+  <div class="d-flex flex-wrap gap-3 justify-content-center mb-3">
+    {% if has_zwg_download %}
+    <a href="{% url 'download_auto_zwg' %}" class="btn btn-dl-zwg">
+      <i class="bi bi-download me-1"></i> Download ZWG Report
+    </a>
+    {% endif %}
+    {% if has_usd_download %}
+    <a href="{% url 'download_auto_usd' %}" class="btn btn-dl-usd">
+      <i class="bi bi-download me-1"></i> Download USD Report
+    </a>
+    {% endif %}
+  </div>
+
+  {# Proceed to Analytics #}
+  <div class="text-center mt-2">
+    <a href="{% url 'auto_reports_proceed' %}" class="btn btn-proceed">
+      <i class="bi bi-bar-chart-line me-1"></i> Proceed to Analytics Page
+    </a>
+    <div class="mt-2" style="font-size:.8rem;color:#888;">
+      This will load the updated reports into the analytics platform.
+    </div>
+  </div>
+
+  <div class="section-divider"></div>
+
+  <div class="text-center">
+    <a href="{% url 'auto_reports' %}" style="font-size:.85rem;color:#1565c0;text-decoration:none;">
+      <i class="bi bi-arrow-clockwise me-1"></i>Process another set of files
+    </a>
+  </div>
+
+  {% endif %}
+
+</div>
+
+<script>
+  const b02Input  = document.getElementById('b02-input');
+  const zwgInput  = document.getElementById('zwg-input');
+  const usdInput  = document.getElementById('usd-input');
+  const submitBtn = document.getElementById('submit-btn');
+
+  function fmt(f) {
+    return `${f.name} (${(f.size/1024).toFixed(1)} KB)`;
+  }
+
+  function updateSubmit() {
+    const hasB02 = b02Input && b02Input.files.length > 0;
+    const hasReport = (zwgInput && zwgInput.files.length > 0) || (usdInput && usdInput.files.length > 0);
+    if (submitBtn) submitBtn.disabled = !(hasB02 && hasReport);
+  }
+
+  if (b02Input) {
+    b02Input.addEventListener('change', () => {
+      const info = document.getElementById('b02-info');
+      if (b02Input.files.length) {
+        const names = Array.from(b02Input.files).map(fmt).join('<br>');
+        info.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i>${names}`;
+        info.classList.remove('d-none');
+      }
+      updateSubmit();
+    });
+  }
+
+  if (zwgInput) {
+    zwgInput.addEventListener('change', () => {
+      const info = document.getElementById('zwg-info');
+      if (zwgInput.files[0]) {
+        info.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i>${fmt(zwgInput.files[0])}`;
+        info.classList.remove('d-none');
+      }
+      updateSubmit();
+    });
+  }
+
+  if (usdInput) {
+    usdInput.addEventListener('change', () => {
+      const info = document.getElementById('usd-info');
+      if (usdInput.files[0]) {
+        info.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i>${fmt(usdInput.files[0])}`;
+        info.classList.remove('d-none');
+      }
+      updateSubmit();
+    });
+  }
+
+  const form = document.getElementById('auto-form');
+  if (form) {
+    form.addEventListener('submit', () => {
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing…';
+      }
+    });
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

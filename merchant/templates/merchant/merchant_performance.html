@@ -1,0 +1,268 @@
+{% extends "merchant/base.html" %}
+{% block title %}Detailed Merchant Performance — Merchant Services{% endblock %}
+
+{% block content %}
+<h2><i class="bi bi-person-lines-fill me-2"></i>Detailed Merchant Performance</h2>
+<hr>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{# ── STEP 1: CIF Lookup ─────────────────────────────────────────────────────── #}
+{% if not confirmed_cif %}
+<div class="section-card" style="max-width:520px;">
+  <h4 class="mb-1">Enter Customer ID (CIF)</h4>
+  <p style="color:#a8d8f0;font-size:.88rem;margin-bottom:1rem;">
+    Enter the merchant's 6-digit CIF to look up their details across all uploaded worksheets.
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="step" value="cif">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-8">
+        <label class="form-label">Customer ID (CIF)</label>
+        <input type="text" name="cif" class="form-control"
+               value="{{ cif_form.cif.value|default:'' }}"
+               placeholder="e.g. 123456" maxlength="10" autocomplete="off">
+        {% if cif_form.cif.errors %}
+          <div class="text-danger small mt-1">{{ cif_form.cif.errors.0 }}</div>
+        {% endif %}
+        {% if cif_form.non_field_errors %}
+          <div class="text-danger small mt-1">{{ cif_form.non_field_errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-4">
+        <button type="submit" class="btn btn-merchant w-100">
+          <i class="bi bi-search me-1"></i> Look Up
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{# ── STEP 2 onwards: Merchant confirmed ─────────────────────────────────────── #}
+{% else %}
+
+{# Merchant header card #}
+<div class="section-card mb-3" style="max-width:680px;border-left:4px solid #FFD700;">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <div style="font-size:.78rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.25rem;">
+        Merchant
+      </div>
+      <div style="font-size:1.25rem;font-weight:800;color:#e8f4fd;">{{ merchant_short_name }}</div>
+      <div style="font-size:.85rem;color:#a8d8f0;margin-top:.2rem;">{{ merchant_name }}</div>
+      <div style="font-size:.85rem;color:#a8d8f0;margin-top:.3rem;">
+        CIF <strong style="color:#FFD700;">{{ confirmed_cif }}</strong>
+        {% if business_unit %}&nbsp;·&nbsp; <span>{{ business_unit }}</span>{% endif %}
+      </div>
+    </div>
+    <a href="{% url 'merchant_performance' %}" class="btn btn-sm"
+       style="background:rgba(100,180,255,0.08);border:1px solid rgba(100,180,255,0.2);color:#a8d8f0;font-size:.8rem;">
+      <i class="bi bi-arrow-left me-1"></i> Different merchant
+    </a>
+  </div>
+</div>
+
+{# Date range form #}
+{% if not has_dashboard %}
+<div class="section-card" style="max-width:620px;">
+  <h4 class="mb-1">Select Date Range</h4>
+  <p style="color:#a8d8f0;font-size:.88rem;margin-bottom:1rem;">
+    Choose the period to analyse. Ranges spanning multiple months are fully supported.
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="step" value="report">
+    <input type="hidden" name="cif_value" value="{{ confirmed_cif }}">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">From Date</label>
+        <input type="date" name="from_date" class="form-control"
+               value="{{ date_form.from_date.value|default:'' }}">
+        {% if date_form.from_date.errors %}
+          <div class="text-danger small mt-1">{{ date_form.from_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">To Date</label>
+        <input type="date" name="to_date" class="form-control"
+               value="{{ date_form.to_date.value|default:'' }}">
+        {% if date_form.to_date.errors %}
+          <div class="text-danger small mt-1">{{ date_form.to_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-merchant w-100" id="run-btn">
+          <i class="bi bi-bar-chart-line"></i> Run
+        </button>
+      </div>
+    </div>
+    {% if date_form.non_field_errors %}
+      <div class="alert alert-danger mt-2 py-2">{{ date_form.non_field_errors.0 }}</div>
+    {% endif %}
+  </form>
+</div>
+{% endif %}
+
+{# ── DASHBOARD ───────────────────────────────────────────────────────────────── #}
+{% if has_dashboard %}
+
+<div class="section-card mt-2 mb-3" style="border-left:4px solid rgba(100,180,255,0.25);">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <h4 class="mb-0" style="color:#FFD700;">
+      <i class="bi bi-calendar-range me-2"></i>{{ date_label }}
+    </h4>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if has_perf_report %}
+      <a href="{% url 'download_merchant_perf_report' %}" class="btn btn-merchant btn-sm">
+        <i class="bi bi-download me-1"></i> Download Performance Report
+      </a>
+      {% endif %}
+      {% if has_idle_report %}
+      <a href="{% url 'download_merchant_idle' %}" class="btn btn-sm"
+         style="background:rgba(255,100,100,0.12);border:1px solid rgba(255,100,100,0.3);color:#ff9a9a;">
+        <i class="bi bi-download me-1"></i> Download Idle Terminals
+      </a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# Metric cards #}
+<div class="row g-3 mb-3">
+
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">ZWG Revenue</div>
+      <div style="font-size:1.5rem;font-weight:800;color:#FFD700;">{{ zwg_rev }}</div>
+      <div style="font-size:.72rem;color:#7a99b8;margin-top:.2rem;">ZWG</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">USD Revenue</div>
+      <div style="font-size:1.5rem;font-weight:800;color:#4fc97e;">{{ usd_rev }}</div>
+      <div style="font-size:.72rem;color:#7a99b8;margin-top:.2rem;">USD</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-2">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Total Terminals</div>
+      <div style="font-size:1.5rem;font-weight:800;color:#a8d8f0;">{{ total_terminals }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-2">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Active</div>
+      <div style="font-size:1.5rem;font-weight:800;color:#4fc97e;">{{ active_terminals }}</div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-2">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Inactive</div>
+      <div style="font-size:1.5rem;font-weight:800;color:{% if inactive_count > 0 %}#ff9a9a{% else %}#4fc97e{% endif %};">
+        {{ inactive_count }}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-2 offset-md-0">
+    <div class="section-card text-center" style="padding:1rem .75rem;border:1px solid {% if activity_ratio_ok %}rgba(79,201,126,0.3){% else %}rgba(255,154,154,0.3){% endif %};">
+      <div style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Activity Ratio</div>
+      <div style="font-size:1.5rem;font-weight:800;color:{% if activity_ratio_ok %}#4fc97e{% else %}#ff9a9a{% endif %};">
+        {{ activity_ratio }}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# Peak days #}
+{% if peak_zwg or peak_usd %}
+<div class="row g-3 mb-3">
+  {% if peak_zwg %}
+  <div class="col-md-6">
+    <div class="section-card" style="padding:.85rem 1rem;">
+      <span style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;">Peak ZWG Day</span>
+      <span style="float:right;color:#FFD700;font-weight:700;">{{ peak_zwg.date }}</span>
+      <div style="font-size:1.1rem;font-weight:700;color:#FFD700;margin-top:.25rem;">
+        {{ peak_zwg.amount }} <span style="font-size:.8rem;font-weight:400;color:#7a99b8;">ZWG</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% if peak_usd %}
+  <div class="col-md-6">
+    <div class="section-card" style="padding:.85rem 1rem;">
+      <span style="font-size:.75rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;">Peak USD Day</span>
+      <span style="float:right;color:#4fc97e;font-weight:700;">{{ peak_usd.date }}</span>
+      <div style="font-size:1.1rem;font-weight:700;color:#4fc97e;margin-top:.25rem;">
+        {{ peak_usd.amount }} <span style="font-size:.8rem;font-weight:400;color:#7a99b8;">USD</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# Daily revenue chart #}
+{% if daily_chart_div %}
+<div class="section-card mb-3">
+  <h5 style="color:#a8d8f0;margin-bottom:.75rem;font-size:.95rem;">
+    <i class="bi bi-graph-up me-2"></i>Daily Revenue Trend
+  </h5>
+  {{ daily_chart_div|safe }}
+</div>
+{% endif %}
+
+
+{# Re-run for different date range #}
+<div class="section-card" style="max-width:620px;">
+  <h5 class="mb-2" style="font-size:.9rem;color:#a8d8f0;">Run for a Different Date Range</h5>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="step" value="report">
+    <input type="hidden" name="cif_value" value="{{ confirmed_cif }}">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">From Date</label>
+        <input type="date" name="from_date" class="form-control"
+               value="{{ from_date|date:'Y-m-d' }}">
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">To Date</label>
+        <input type="date" name="to_date" class="form-control"
+               value="{{ to_date|date:'Y-m-d' }}">
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-merchant w-100" id="rerun-btn">
+          <i class="bi bi-arrow-clockwise"></i> Re-run
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% endif %}{# end has_dashboard #}
+{% endif %}{# end confirmed_cif #}
+
+<script>
+  document.querySelectorAll('form').forEach(function(f) {
+    f.addEventListener('submit', function() {
+      ['run-btn','rerun-btn'].forEach(function(id) {
+        const btn = document.getElementById(id);
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+        }
+      });
+    });
+  });
+</script>
+{% endblock %}

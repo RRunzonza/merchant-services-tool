@@ -1,0 +1,260 @@
+{% extends "merchant/base.html" %}
+{% block title %}Performance by Sector — Merchant Services{% endblock %}
+
+{% block content %}
+<h2><i class="bi bi-diagram-3 me-2"></i>Performance by Sector</h2>
+<hr>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{# Date range form — always visible so user can re-run #}
+<div class="section-card mb-4" style="max-width:660px;">
+  {% if not has_dashboard %}
+  <h4 class="mb-1">Select Date Range</h4>
+  <p style="color:#a8d8f0;font-size:.88rem;margin-bottom:1rem;">
+    Choose the period to analyse. All sectors across every uploaded worksheet are included automatically.
+  </p>
+  {% else %}
+  <h5 class="mb-2" style="font-size:.9rem;color:#a8d8f0;">Run for a Different Date Range</h5>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">From Date</label>
+        <input type="date" name="from_date" class="form-control"
+               value="{% if has_dashboard %}{{ from_date|date:'Y-m-d' }}{% else %}{{ form.from_date.value|default:'' }}{% endif %}">
+        {% if form.from_date.errors %}
+          <div class="text-danger small mt-1">{{ form.from_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">To Date</label>
+        <input type="date" name="to_date" class="form-control"
+               value="{% if has_dashboard %}{{ to_date|date:'Y-m-d' }}{% else %}{{ form.to_date.value|default:'' }}{% endif %}">
+        {% if form.to_date.errors %}
+          <div class="text-danger small mt-1">{{ form.to_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-merchant w-100" id="run-btn">
+          <i class="bi bi-bar-chart-line"></i> {% if has_dashboard %}Re-run{% else %}Run{% endif %}
+        </button>
+      </div>
+    </div>
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger mt-2 py-2">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+  </form>
+</div>
+
+{# ── DASHBOARD ───────────────────────────────────────────────────────────────── #}
+{% if has_dashboard %}
+
+{# Period header + download buttons #}
+<div class="section-card mb-3" style="border-left:4px solid rgba(100,180,255,0.25);">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <h4 class="mb-0" style="color:#FFD700;">
+      <i class="bi bi-calendar-range me-2"></i>{{ date_label }}
+    </h4>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if has_combined_download %}
+      <a href="{% url 'download_sector_combined' %}" class="btn btn-merchant btn-sm">
+        <i class="bi bi-download me-1"></i> Download Top 10 Sectors
+      </a>
+      {% endif %}
+      {% if has_detailed_download %}
+      <a href="{% url 'download_sector_detailed' %}" class="btn btn-sm"
+         style="background:rgba(168,216,240,0.12);border:1px solid rgba(168,216,240,0.3);color:#a8d8f0;">
+        <i class="bi bi-file-earmark-bar-graph me-1"></i> Further Sector Metrics
+      </a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# Summary metric cards #}
+<div class="row g-3 mb-3">
+
+  {% if total_zwg_rev %}
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Total ZWG Revenue</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#FFD700;">{{ total_zwg_rev }}</div>
+      <div style="font-size:.7rem;color:#7a99b8;margin-top:.2rem;">ZWG</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if total_usd_rev %}
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Total USD Revenue</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#4fc97e;">{{ total_usd_rev }}</div>
+      <div style="font-size:.7rem;color:#7a99b8;margin-top:.2rem;">USD</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if total_active_sectors is not None %}
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Active Sectors</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#a8d8f0;">{{ total_active_sectors }}</div>
+      <div style="font-size:.7rem;color:#7a99b8;margin-top:.2rem;">ZWG + USD</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if total_sectors is not None %}
+  <div class="col-6 col-md-3">
+    <div class="section-card text-center" style="padding:1rem .75rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">Total Sectors</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#a8d8f0;">{{ total_sectors }}</div>
+      <div style="font-size:.7rem;color:#7a99b8;margin-top:.2rem;">Active + Inactive</div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+{# Top-performer callout cards #}
+{% if top_zwg_sector or top_usd_sector %}
+<div class="row g-3 mb-3">
+  {% if top_zwg_sector %}
+  <div class="col-md-6">
+    <div class="section-card" style="border-left:4px solid #FFD700;padding:1rem 1.25rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem;">
+        <i class="bi bi-trophy-fill me-1" style="color:#FFD700;"></i>Top ZWG Sector
+      </div>
+      <div style="font-size:1.15rem;font-weight:800;color:#FFD700;">{{ top_zwg_sector.name }}</div>
+      <div class="d-flex gap-3 mt-1" style="font-size:.85rem;">
+        <span style="color:#e8f4fd;font-weight:600;">{{ top_zwg_sector.revenue }} <span style="color:#7a99b8;font-weight:400;">ZWG</span></span>
+        <span style="color:#7a99b8;">·</span>
+        <span style="color:#a8d8f0;">{{ top_zwg_sector.share }} of total ZWG</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% if top_usd_sector %}
+  <div class="col-md-6">
+    <div class="section-card" style="border-left:4px solid #4fc97e;padding:1rem 1.25rem;">
+      <div style="font-size:.72rem;color:#7a99b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem;">
+        <i class="bi bi-trophy-fill me-1" style="color:#4fc97e;"></i>Top USD Sector
+      </div>
+      <div style="font-size:1.15rem;font-weight:800;color:#4fc97e;">{{ top_usd_sector.name }}</div>
+      <div class="d-flex gap-3 mt-1" style="font-size:.85rem;">
+        <span style="color:#e8f4fd;font-weight:600;">{{ top_usd_sector.revenue }} <span style="color:#7a99b8;font-weight:400;">USD</span></span>
+        <span style="color:#7a99b8;">·</span>
+        <span style="color:#a8d8f0;">{{ top_usd_sector.share }} of total USD</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ZWG chart + table #}
+{% if zwg_chart_div %}
+<div class="section-card mb-3">
+  <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+    <h5 style="color:#FFD700;font-size:.95rem;margin:0;">
+      <i class="bi bi-bar-chart-fill me-2"></i>Top 10 Sectors — ZWG Revenue
+    </h5>
+  </div>
+  {{ zwg_chart_div|safe }}
+
+  {% if zwg_sector_rows %}
+  <div style="overflow-x:auto;border-radius:8px;margin-top:1rem;">
+    <table class="top25-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Sector</th>
+          <th>ZWG Revenue</th>
+          <th>Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in zwg_sector_rows %}
+        <tr>
+          <td style="color:#7a99b8;">{{ r.rank }}</td>
+          <td>{{ r.sector }}</td>
+          <td style="color:#FFD700;font-weight:600;">{{ r.revenue }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;background:rgba(255,215,0,0.12);border-radius:4px;height:6px;min-width:60px;">
+                <div style="width:{{ r.share }};background:#FFD700;border-radius:4px;height:6px;"></div>
+              </div>
+              <span style="color:#a8d8f0;font-size:.82rem;white-space:nowrap;">{{ r.share }}</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# USD chart + table #}
+{% if usd_chart_div %}
+<div class="section-card mb-3">
+  <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+    <h5 style="color:#4fc97e;font-size:.95rem;margin:0;">
+      <i class="bi bi-bar-chart-fill me-2"></i>Top 10 Sectors — USD Revenue
+    </h5>
+  </div>
+  {{ usd_chart_div|safe }}
+
+  {% if usd_sector_rows %}
+  <div style="overflow-x:auto;border-radius:8px;margin-top:1rem;">
+    <table class="top25-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Sector</th>
+          <th>USD Revenue</th>
+          <th>Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in usd_sector_rows %}
+        <tr>
+          <td style="color:#7a99b8;">{{ r.rank }}</td>
+          <td>{{ r.sector }}</td>
+          <td style="color:#4fc97e;font-weight:600;">{{ r.revenue }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;background:rgba(79,201,126,0.12);border-radius:4px;height:6px;min-width:60px;">
+                <div style="width:{{ r.share }};background:#4fc97e;border-radius:4px;height:6px;"></div>
+              </div>
+              <span style="color:#a8d8f0;font-size:.82rem;white-space:nowrap;">{{ r.share }}</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endif %}{# end has_dashboard #}
+
+<script>
+  document.querySelectorAll('form').forEach(function(f) {
+    f.addEventListener('submit', function() {
+      const btn = document.getElementById('run-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+      }
+    });
+  });
+</script>
+{% endblock %}

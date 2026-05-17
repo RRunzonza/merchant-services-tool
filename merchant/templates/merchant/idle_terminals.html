@@ -1,0 +1,118 @@
+{% extends "merchant/base.html" %}
+{% block title %}Idle Terminals — Merchant Services{% endblock %}
+
+{% block content %}
+<h2><i class="bi bi-pc-display-horizontal me-2"></i>Idle PoS Terminals</h2>
+<hr>
+
+<div class="section-card" style="max-width:560px;">
+  <h4 class="mb-3">Select Period</h4>
+  <p style="color:#a8d8f0;font-size:.9rem;">Select the period to identify idle terminals, then click Find.</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">From</label>
+        <input type="date" name="from_date" class="form-control"
+          value="{{ form.from_date.value|default:'' }}">
+        {% if form.from_date.errors %}
+          <div class="text-danger small mt-1">{{ form.from_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">To</label>
+        <input type="date" name="to_date" class="form-control"
+          value="{{ form.to_date.value|default:'' }}">
+        {% if form.to_date.errors %}
+          <div class="text-danger small mt-1">{{ form.to_date.errors.0 }}</div>
+        {% endif %}
+      </div>
+      <div class="col-md-2">
+        <button type="submit" name="submit_action" value="find" class="btn btn-merchant w-100">
+          <i class="bi bi-search"></i> Find
+        </button>
+      </div>
+    </div>
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger mt-2 py-2">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+  </form>
+</div>
+
+{% if error %}
+  <div class="alert alert-warning mt-3">{{ error }}</div>
+{% endif %}
+
+{% if has_download %}
+<div class="section-card mt-3">
+  <h4 class="mb-3">
+    <i class="bi bi-pc-display-horizontal me-2" style="color:#FFD700;"></i>
+    Idle Terminals Dashboard — {{ date_label }}
+  </h4>
+
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="metric-card">
+        <div class="metric-label">Total Common Idle</div>
+        <div class="metric-value">{{ total_idle }}</div>
+      </div>
+    </div>
+  </div>
+
+  {% if chart_div %}
+  <div class="mb-4">
+    {{ chart_div|safe }}
+  </div>
+  {% endif %}
+
+  <hr>
+
+  <div class="mb-3">
+    <a href="{% url 'download_idle_total' %}?date_label={{ date_label|urlencode }}"
+       class="btn btn-merchant">
+      <i class="bi bi-download me-1"></i> Download Total Idle Terminals for {{ date_label }}
+    </a>
+  </div>
+
+  {% if business_units %}
+  <hr>
+  <h5 class="mb-3" style="color:#e8f4fd;">Download Idle Terminals by Business Unit</h5>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">Business units found in idle terminals list</label>
+        <select name="selected_bu" class="form-select">
+          <option value="">-- Select a Business Unit --</option>
+          {% for bu in business_units %}
+            <option value="{{ bu }}" {% if selected_bu == bu %}selected{% endif %}>{{ bu }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <!-- re-submit the date range too so the view can recompute idle data -->
+      <input type="hidden" name="from_date" value="{{ form.from_date.value|default:'' }}">
+      <input type="hidden" name="to_date"   value="{{ form.to_date.value|default:'' }}">
+      <div class="col-md-4">
+        <button type="submit" name="submit_action" value="find" class="btn btn-merchant">
+          <i class="bi bi-funnel me-1"></i> Filter &amp; Prepare Download
+        </button>
+      </div>
+    </div>
+  </form>
+
+  {% if has_unit_download %}
+  <div class="mt-3">
+    <a href="{% url 'download_idle_unit' %}?bu={{ selected_bu|urlencode }}&date_label={{ date_label|urlencode }}"
+       class="btn btn-merchant btn-sm">
+      <i class="bi bi-download me-1"></i> Download {{ selected_bu }} Idle Terminals
+    </a>
+  </div>
+  {% endif %}
+
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,121 @@
+{% extends "merchant/base.html" %}
+{% block title %}Periodic Data Analytics — Merchant Services{% endblock %}
+
+{% block content %}
+<h2><i class="bi bi-calendar-range me-2"></i>Periodic Data Analytics</h2>
+<hr>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% else %}
+
+<div class="alert alert-info py-2 mb-3">
+  <i class="bi bi-layers me-1"></i>
+  All worksheets loaded — ZWG: <strong>{{ zwg_sheet_count }}</strong> sheet{{ zwg_sheet_count|pluralize }},
+  USD: <strong>{{ usd_sheet_count }}</strong> sheet{{ usd_sheet_count|pluralize }}.
+  {% if data_period %}Data spans <strong>{{ data_period }}</strong>.{% endif %}
+</div>
+
+
+<div class="row g-4">
+
+  <div class="col-md-4">
+    <a href="{% url 'idle_terminals' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-pc-display-horizontal"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">Idle Terminals</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> Find idle terminals
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'zwg_top25' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-bar-chart-line-fill"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">ZWG Weekly Top 25</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> Generate ZWG Top 25
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'usd_top25' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-currency-dollar"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">USD Weekly Top 25</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> Generate USD Top 25
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'merchant_performance' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-person-lines-fill"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">Detailed Merchant Performance</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> View merchant performance
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'bu_performance' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-building"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">Business Unit Performance</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> View BU performance
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'sector_performance' %}" style="text-decoration:none;">
+      <div class="section-card h-100" style="border:2px solid rgba(100,180,255,0.15);transition:border-color .2s,transform .15s;cursor:pointer;"
+           onmouseover="this.style.borderColor='#FFD700';this.style.transform='translateY(-3px)'"
+           onmouseout="this.style.borderColor='rgba(100,180,255,0.15)';this.style.transform='translateY(0)'">
+        <div style="font-size:2.4rem;color:#FFD700;margin-bottom:.75rem;">
+          <i class="bi bi-diagram-3"></i>
+        </div>
+        <h4 style="color:#e8f4fd;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;">Performance by Sector</h4>
+        <div class="mt-3" style="color:#FFD700;font-size:.82rem;font-weight:600;">
+          <i class="bi bi-arrow-right-circle me-1"></i> View sector performance
+        </div>
+      </div>
+    </a>
+  </div>
+
+</div>
+
+{% endif %}
+{% endblock %}

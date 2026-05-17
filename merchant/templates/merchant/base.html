@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Merchant Services Digital Platform{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+<style>
+  :root {
+    --bg-main: linear-gradient(160deg,#0d1b2a 0%,#1b2838 50%,#0f3460 100%);
+    --sidebar-bg: linear-gradient(180deg,#0a1628 0%,#1b2838 100%);
+    --card-bg: rgba(26,58,92,0.85);
+    --gold: #FFD700;
+    --blue-light: #a8d8f0;
+    --text-main: #e0e8f0;
+    --border: rgba(100,180,255,0.2);
+  }
+  body { background: var(--bg-main); min-height:100vh; color:var(--text-main); font-family:'Segoe UI',sans-serif; }
+  /* Sidebar */
+  #sidebar {
+    width:260px; min-height:100vh; background:var(--sidebar-bg);
+    border-right:1px solid rgba(255,255,255,0.08);
+    position:fixed; top:0; left:0; z-index:100; padding:1.5rem 1rem;
+    display:flex; flex-direction:column;
+  }
+  #sidebar .brand { color:var(--gold); font-size:1.2rem; font-weight:800; letter-spacing:.5px; }
+  #sidebar .brand-sub { color:var(--blue-light); font-size:.8rem; }
+  #sidebar .nav-link {
+    color:#c6d4df !important; border-radius:8px; padding:.6rem 1rem; margin:.15rem 0;
+    display:flex; align-items:center; gap:.5rem; transition:background .2s;
+  }
+  #sidebar .nav-link:hover, #sidebar .nav-link.active {
+    background:rgba(100,180,255,0.12); color:var(--gold) !important;
+  }
+  #sidebar .nav-link.active { font-weight:700; border-left:3px solid var(--gold); }
+  #sidebar .period-badge {
+    background:rgba(255,255,255,0.06); border:1px solid var(--border);
+    border-radius:8px; padding:.5rem .75rem; font-size:.78rem; color:var(--blue-light);
+    margin-top:1rem;
+  }
+  /* Main content */
+  #main-content { margin-left:260px; padding:2rem; }
+  /* Cards / metrics */
+  .metric-card {
+    background:linear-gradient(135deg,#1a3a5c 0%,#1e5276 100%);
+    border:1px solid var(--border); border-radius:12px;
+    padding:1.2rem 1.4rem; box-shadow:0 6px 20px rgba(0,0,0,.4);
+  }
+  .metric-label { color:var(--blue-light); font-size:.78rem; font-weight:600; text-transform:uppercase; letter-spacing:.8px; }
+  .metric-value { color:var(--gold); font-size:1.8rem; font-weight:800; text-shadow:0 0 12px rgba(255,215,0,.4); }
+  .metric-sublabel { color:var(--blue-light); font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.7px; margin-bottom:.1rem; }
+  .metric-divider { flex-shrink:0; width:1px; background:rgba(100,180,255,0.35); align-self:stretch; margin:0 .5rem; }
+  .metric-value-sm { color:var(--gold); font-size:1.35rem; font-weight:800; text-shadow:0 0 10px rgba(255,215,0,.35); white-space:nowrap; }
+  .metric-split { display:flex; align-items:center; margin-top:.25rem; }
+  /* Table */
+  .perf-table { width:100%; border-collapse:collapse; font-size:14px; }
+  .perf-table thead tr { background:#1e3a5c; }
+  .perf-table th { color:var(--gold); font-weight:700; padding:10px 14px; border-bottom:2px solid #2980b9; text-align:left; white-space:nowrap; }
+  .perf-table td { padding:9px 14px; color:var(--text-main); border-bottom:1px solid rgba(255,255,255,.07); }
+  .perf-table tr:nth-child(even) td { background:rgba(255,255,255,.04); }
+  .perf-table tr:nth-child(odd)  td { background:rgba(255,255,255,.09); }
+  .usage-ok   { background:#2e7d32 !important; color:#fff; font-weight:700; text-align:center; border-radius:4px; }
+  .usage-low  { background:#c62828 !important; color:#fff; font-weight:700; text-align:center; border-radius:4px; }
+  .ch-pos { color:#4fc97e; font-weight:600; }
+  .ch-neg { color:#ff6b6b; font-weight:600; }
+  /* Buttons */
+  .btn-merchant {
+    background:linear-gradient(135deg,#1565c0,#0d47a1); color:#fff;
+    border:none; border-radius:8px; font-weight:600;
+    box-shadow:0 3px 10px rgba(0,0,0,.3);
+  }
+  .btn-merchant:hover { background:linear-gradient(135deg,#1976d2,#1565c0); color:#fff; }
+  /* Section card */
+  .section-card {
+    background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07);
+    border-radius:14px; padding:1.5rem; margin-bottom:1.5rem;
+  }
+  h2,h3,h4 { color:#e8f4fd !important; }
+  hr { border-color:rgba(255,255,255,.1) !important; }
+  .alert-info    { background:rgba(13,110,253,.15); border-color:rgba(13,110,253,.3); color:#a8d8f0; }
+  .alert-success { background:rgba(25,135,84,.15);  border-color:rgba(25,135,84,.3);  color:#7fffd4; }
+  .alert-warning { background:rgba(255,193,7,.1);   border-color:rgba(255,193,7,.3);  color:#ffd700; }
+  .alert-danger  { background:rgba(220,53,69,.15);  border-color:rgba(220,53,69,.3);  color:#ff6b6b; }
+  .form-control, .form-select {
+    background-color:#0d1b2a !important; border:1px solid rgba(255,255,255,.2);
+    color:var(--text-main) !important; border-radius:8px; color-scheme:dark;
+  }
+  .form-control:focus, .form-select:focus {
+    background-color:#112240 !important; border-color:var(--blue-light);
+    color:#fff !important; box-shadow:0 0 0 3px rgba(100,180,255,.2);
+  }
+  .form-select option {
+    background-color:#0d1b2a; color:#e0e8f0;
+  }
+  .form-label { color:var(--blue-light); font-weight:600; font-size:.9rem; }
+  /* Top25 table */
+  .top25-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .top25-table th { background:#1e3a5c; color:var(--gold); padding:8px 12px; border-bottom:2px solid #2980b9; }
+  .top25-table td { padding:7px 12px; color:var(--text-main); border-bottom:1px solid rgba(255,255,255,.06); }
+  .top25-table tr:nth-child(even) td { background:rgba(255,255,255,.04); }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+
+{% block body %}
+<div id="sidebar">
+  <div class="mb-3">
+    <div class="brand">Merchant Services</div>
+    <div class="brand-sub">Digital Platform</div>
+    <div style="color:#7a99b8;font-size:.75rem;margin-top:.2rem;">Daily transaction analytics</div>
+  </div>
+
+  {% if data_period %}
+  <div class="period-badge">
+    <i class="bi bi-calendar3"></i>
+    <strong>Data period:</strong><br>{{ data_period }}
+  </div>
+  {% endif %}
+
+  <hr>
+
+  <nav class="nav flex-column mt-1" id="sidebar-nav">
+    {% if section == 'periodic' %}
+    <div style="color:#7a99b8;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:.25rem 1rem .1rem;">Periodic Analytics</div>
+    <a href="{% url 'idle_terminals' %}" class="nav-link {% if active_page == 'idle' %}active{% endif %}">
+      <i class="bi bi-pc-display-horizontal"></i> Idle Terminals
+    </a>
+    <a href="{% url 'zwg_top25' %}" class="nav-link {% if active_page == 'zwg_top25' %}active{% endif %}">
+      <i class="bi bi-bar-chart-line"></i> ZWG Weekly Top 25
+    </a>
+    <a href="{% url 'usd_top25' %}" class="nav-link {% if active_page == 'usd_top25' %}active{% endif %}">
+      <i class="bi bi-currency-dollar"></i> USD Weekly Top 25
+    </a>
+    <a href="{% url 'merchant_performance' %}" class="nav-link {% if active_page == 'merchant_perf' %}active{% endif %}">
+      <i class="bi bi-person-lines-fill"></i> Merchant Performance
+    </a>
+    <a href="{% url 'bu_performance' %}" class="nav-link {% if active_page == 'bu_perf' %}active{% endif %}">
+      <i class="bi bi-building"></i> BU Performance
+    </a>
+    <a href="{% url 'sector_performance' %}" class="nav-link {% if active_page == 'sector_perf' %}active{% endif %}">
+      <i class="bi bi-diagram-3"></i> Sector Performance
+    </a>
+    {% else %}
+    <div style="color:#7a99b8;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:.25rem 1rem .1rem;">Daily Analytics</div>
+    <a href="{% url 'zwg_performance' %}" class="nav-link {% if active_page == 'zwg' %}active{% endif %}">
+      <i class="bi bi-bar-chart-line"></i> ZWG Performance
+    </a>
+    <a href="{% url 'usd_performance' %}" class="nav-link {% if active_page == 'usd' %}active{% endif %}">
+      <i class="bi bi-currency-dollar"></i> USD Performance
+    </a>
+    <a href="{% url 'pos_statements' %}" class="nav-link {% if active_page == 'pos' %}active{% endif %}">
+      <i class="bi bi-file-earmark-text"></i> PoS Statements
+    </a>
+    {% endif %}
+
+    <hr style="border-color:rgba(255,255,255,0.1);margin:.6rem 0;">
+    <a href="{% url 'choose_analytics' %}" class="nav-link" style="color:#a8d8f0!important;font-size:.88rem;">
+      <i class="bi bi-arrow-left-circle"></i> Analytics Choice
+    </a>
+  </nav>
+
+  <div class="mt-auto pt-3">
+    <a href="{% url 'logout' %}" class="btn btn-sm btn-merchant w-100">
+      <i class="bi bi-arrow-bar-left"></i> Logout / Upload New
+    </a>
+  </div>
+</div>
+
+<div id="main-content">
+  {% block content %}{% endblock %}
+</div>
+{% endblock %}
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
