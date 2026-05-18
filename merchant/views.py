@@ -319,8 +319,9 @@ def zwg_performance_view(request):
         return render(request, 'merchant/zwg_performance.html', ctx)
 
     df = df_raw.copy()
-    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
+    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL', 'NAN', 'NONE', '0', ''])]
     df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+    df = df[~df['CIF'].str.lower().str.contains('nan')]
 
     date_columns = extract_date_columns(df)
     if not date_columns:
@@ -420,8 +421,9 @@ def usd_performance_view(request):
         return render(request, 'merchant/usd_performance.html', ctx)
 
     df = df_raw.copy()
-    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
+    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL', 'NAN', 'NONE', '0', ''])]
     df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+    df = df[~df['CIF'].str.lower().str.contains('nan')]
 
     date_columns = extract_date_columns(df)
     if not date_columns:
