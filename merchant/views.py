@@ -31,6 +31,7 @@ from .utils import (
     champions_zinara_bytes,
     champions_insurance_bytes,
     compute_mtd_from_total_row,
+    compute_daily_from_total_row,
     build_merchant_revenue_chart,
     merchant_period_excel_bytes,
     validate_b02_file,
@@ -338,6 +339,7 @@ def zwg_performance_view(request):
     # Top 15
     metrics, top15_rows = build_top15_data(df, date_map, latest_date_obj, latest_col_name, prev_date_obj)
     metrics['mtd_revenue'] = f"{compute_mtd_from_total_row(df_raw, date_columns):,.0f}"
+    metrics['total_revenue'] = f"{compute_daily_from_total_row(df_raw, latest_col_name):,.0f}"
     ctx['metrics']     = metrics
     ctx['top15_rows']  = top15_rows
     ctx['display_date'] = latest_date_obj.strftime('%d %b %Y')
@@ -439,6 +441,7 @@ def usd_performance_view(request):
 
     metrics, top15_rows = build_top15_data(df, date_map, latest_date_obj, latest_col_name, prev_date_obj)
     metrics['mtd_revenue'] = f"{compute_mtd_from_total_row(df_raw, date_columns):,.0f}"
+    metrics['total_revenue'] = f"{compute_daily_from_total_row(df_raw, latest_col_name):,.0f}"
     ctx['metrics']      = metrics
     ctx['top15_rows']   = top15_rows
     ctx['display_date'] = latest_date_obj.strftime('%d %b %Y')

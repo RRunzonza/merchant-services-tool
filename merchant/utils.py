@@ -509,6 +509,24 @@ def compute_mtd_from_total_row(df_raw, date_columns):
     return round(float(mtd), 2)
 
 
+def compute_daily_from_total_row(df_raw, col_name):
+    """Read the daily revenue for a specific date column from the TOTAL row."""
+    if col_name not in df_raw.columns:
+        return 0.0
+    total_mask = (
+        df_raw['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL']) |
+        df_raw['TID'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])
+    )
+    total_rows = df_raw[total_mask]
+    if not total_rows.empty:
+        val = _to_numeric(pd.Series([total_rows.iloc[-1][col_name]])).iloc[0]
+        if val > 0:
+            return round(float(val), 2)
+    # Fallback: sum individual rows excluding total rows
+    data_rows = df_raw[~total_mask]
+    return round(float(_to_numeric(data_rows[col_name]).sum()), 2)
+
+
 def build_performance_report_bytes(df_raw):
     """Build the daily performance Excel report and return bytes."""
     rpt_df = df_raw.copy()
