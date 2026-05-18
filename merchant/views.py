@@ -319,7 +319,7 @@ def zwg_performance_view(request):
         return render(request, 'merchant/zwg_performance.html', ctx)
 
     df = df_raw.copy()
-    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL', 'NAN', 'NONE', '0', ''])]
+    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
     df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
     df = df[~df['CIF'].str.lower().str.contains('nan')]
 
@@ -421,7 +421,7 @@ def usd_performance_view(request):
         return render(request, 'merchant/usd_performance.html', ctx)
 
     df = df_raw.copy()
-    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL', 'NAN', 'NONE', '0', ''])]
+    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
     df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
     df = df[~df['CIF'].str.lower().str.contains('nan')]
 
