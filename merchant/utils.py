@@ -239,8 +239,20 @@ def _build_report_sheets(rpt_df):
 
     used_names = set(sheets.keys())
     for cif in eligible:
-        cif_data   = rpt_df[rpt_df['CIF'] == cif]
-        sheet_name = CIF_SHEET_NAMES.get(cif, str(cif_data['MERCHANT NAME'].iloc[0]).split()[0])[:31]
+        cif_data = rpt_df[rpt_df['CIF'] == cif]
+        if cif in CIF_SHEET_NAMES:
+            _derived = CIF_SHEET_NAMES[cif]
+        else:
+            # Find first non-null, non-empty merchant name for this CIF
+            _names = (
+                cif_data['MERCHANT NAME']
+                .dropna()
+                .astype(str)
+                .str.strip()
+            )
+            _names = _names[~_names.str.lower().isin(['', 'nan', 'none'])]
+            _derived = _names.iloc[0].split()[0] if not _names.empty else cif
+        sheet_name = _derived[:31]
         if sheet_name in used_names:
             sheet_name = (sheet_name[:27] + '_' + cif[-3:])[:31]
         used_names.add(sheet_name)
@@ -259,6 +271,8 @@ def _build_gainers_shakers(report_sheets, date_map, latest_col_name, threshold):
 
     records = []
     for sheet_name, data in report_sheets.items():
+        if str(sheet_name).strip().lower() in ('nan', 'none', ''):
+            continue
         if latest_col_name not in data.columns:
             continue
 
@@ -667,6 +681,13 @@ def merchant_period_excel_bytes(filt_zwg, filt_usd, zwg_period_cols, usd_period_
         df = frame[avail_fixed + avail_period].copy()
         for col in avail_period:
             df[col] = _to_numeric(df[col])
+        # The all-sheets concat gives one row per TID per month-sheet.
+        # Collapse duplicates: sum period columns, keep first value for text.
+        if 'TID' in df.columns:
+            agg = {c: 'first' for c in avail_fixed if c != 'TID'}
+            agg.update({c: 'sum' for c in avail_period})
+            df = df.groupby('TID', as_index=False).agg(agg)
+            df = df[[c for c in avail_fixed + avail_period if c in df.columns]]
         df['TOTAL'] = df[avail_period].sum(axis=1)
         return df
 
@@ -1493,8 +1514,21 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                     if isinstance(_cell.value, str) and _cell.value.startswith('='):
                         _cell.value = None
 
-        # Freeze the first row so it stays visible when scrolling
+        # Freeze the first row so it stays visible when scrolling,
+        # then reset the viewport so the file opens at row 1 rather than
+        # wherever the last insert_rows() call left the cursor.
         _ws.freeze_panes = 'A2'
+        try:
+            from openpyxl.worksheet.views import Selection as _Sel
+            _sv = _ws.sheet_view
+            if _sv.pane:
+                _sv.pane.topLeftCell = 'A2'
+            _sv.selection = [
+                _Sel(pane='topLeft',    activeCell='A1', sqref='A1'),
+                _Sel(pane='bottomLeft', activeCell='A2', sqref='A2'),
+            ]
+        except Exception:
+            pass
 
     buf = io.BytesIO()
     wb.save(buf)
