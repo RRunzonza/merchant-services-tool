@@ -1540,6 +1540,22 @@ def update_merchant_report(report_bytes, b02_totals, currency):
         except Exception:
             pass
         _ws.freeze_panes = 'A2'
+        try:
+            from openpyxl.worksheet.views import Selection as _Sel
+            _sv = _ws.sheet_view
+            if _sv.pane:
+                _sv.pane.topLeftCell = 'A2'
+            # Mutate the list in-place — direct reassignment (_sv.selection = [...])
+            # can replace the Sequence descriptor's tracked list with a plain Python
+            # list, which openpyxl then serialises to malformed XML and Excel rejects
+            # the file as corrupted.
+            _sel = _sv.selection
+            if _sel is not None:
+                del _sel[:]
+                _sel.append(_Sel(pane='topLeft',    activeCell='A1', sqref='A1'))
+                _sel.append(_Sel(pane='bottomLeft', activeCell='A2', sqref='A2'))
+        except Exception:
+            pass
 
     buf = io.BytesIO()
     wb.save(buf)
