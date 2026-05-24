@@ -1305,47 +1305,19 @@ def update_merchant_report(report_bytes, b02_totals, currency):
             ws.cell(total_row, col).value = round(col_sum, 2)
 
         # ── Recalculate TOTAL row's TOTAL meta-column ──────────────────────────
-        # The existing formula (e.g. =SUM(I2:I2598)) deliberately covers only a
-        # sub-range of rows — rows appended beyond that range are intentionally
-        # excluded from the headline MTD total (tracked separately).  We honour
-        # that range: start from the full date-column sums we just computed (all
-        # rows) and subtract the contributions from any rows outside the range.
+        # The TOTAL row's date columns were just recomputed above to reflect ALL
+        # data rows (including any newly inserted ones).  Sum them directly — this
+        # equals the sum of every row's TOTAL column and gives the true MTD figure.
         if total_meta_col:
-            existing_total_formula = ws.cell(total_row, total_meta_col).value
-            import re as _re_local
-            if isinstance(existing_total_formula, str) and existing_total_formula.startswith('='):
-                _fm = _re_local.search(r'[A-Z]+(\d+):[A-Z]+(\d+)', existing_total_formula)
-                formula_end = int(_fm.group(2)) if _fm else (total_row - 1)
-
-                # Sum of all date cols in TOTAL row = sum of ALL data rows
-                total_row_sum = 0.0
-                for col in date_col_map.values():
-                    tv = ws.cell(total_row, col).value
-                    if tv is not None:
-                        try:
-                            total_row_sum += float(tv)
-                        except (ValueError, TypeError):
-                            pass
-                    # Subtract rows that fall OUTSIDE the formula range
-                    for r in range(formula_end + 1, total_row):
-                        v = ws.cell(r, col).value
-                        if v is not None and not (isinstance(v, str) and v.startswith('=')):
-                            try:
-                                total_row_sum -= float(v)
-                            except (ValueError, TypeError):
-                                pass
-                ws.cell(total_row, total_meta_col).value = round(total_row_sum, 2)
-            else:
-                # No formula present — sum the TOTAL row date columns directly
-                total_row_sum = 0.0
-                for col in date_col_map.values():
-                    v = ws.cell(total_row, col).value
-                    if v is not None and not (isinstance(v, str) and v.startswith('=')):
-                        try:
-                            total_row_sum += float(v)
-                        except (ValueError, TypeError):
-                            pass
-                ws.cell(total_row, total_meta_col).value = round(total_row_sum, 2)
+            total_row_sum = 0.0
+            for col in date_col_map.values():
+                v = ws.cell(total_row, col).value
+                if v is not None and not (isinstance(v, str) and v.startswith('=')):
+                    try:
+                        total_row_sum += float(v)
+                    except (ValueError, TypeError):
+                        pass
+            ws.cell(total_row, total_meta_col).value = round(total_row_sum, 2)
 
         # ── REVENUE column in TOTAL row: leave original formula intact ─────────
         # Per-row REVENUE cells are =MDR*TOTAL formulas whose current values are
