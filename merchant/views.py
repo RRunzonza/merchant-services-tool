@@ -1343,10 +1343,12 @@ def _sector_combined_excel_bytes(top10_zwg, top10_usd):
             export = top10_zwg[['SECTOR', '_rev']].copy()
             export.columns = ['SECTOR', 'ZWG REVENUE']
             export.to_excel(writer, index=False, sheet_name='zwg')
+            writer.sheets['zwg'].freeze_panes = 'A2'
         if top10_usd is not None and not top10_usd.empty:
             export = top10_usd[['SECTOR', '_rev']].copy()
             export.columns = ['SECTOR', 'USD REVENUE']
             export.to_excel(writer, index=False, sheet_name='usd')
+            writer.sheets['usd'].freeze_panes = 'A2'
     return buf.getvalue()
 
 
@@ -1414,6 +1416,7 @@ def _sector_detailed_excel_bytes(
                  else pd.DataFrame(columns=['SECTOR', 'CURRENCY', 'PREVIOUSLY', 'CURRENTLY', 'VARIANCE']))
         gs_df.to_excel(writer, index=False, sheet_name='Gainers and Shakers')
         ws_gs = writer.sheets['Gainers and Shakers']
+        ws_gs.freeze_panes = 'A2'
         for row in ws_gs.iter_rows(min_row=2, min_col=3, max_col=5):
             for cell in row:
                 cell.number_format = acct_fmt
@@ -1426,6 +1429,7 @@ def _sector_detailed_excel_bytes(
         idle_df = (pd.DataFrame(idle_rows) if idle_rows
                    else pd.DataFrame(columns=['SECTOR', 'CURRENCY']))
         idle_df.to_excel(writer, index=False, sheet_name='Idle Sectors')
+        writer.sheets['Idle Sectors'].freeze_panes = 'A2'
 
         # ── Sheet 3: All Sectors Comparison (current vs prior period) ─────────
         comp_parts = []
@@ -1453,6 +1457,7 @@ def _sector_detailed_excel_bytes(
             all_comp.sort_values(['CURRENCY', 'CURRENTLY'], ascending=[True, False], inplace=True)
             all_comp.to_excel(writer, index=False, sheet_name='All Sectors Comparison')
             ws_comp = writer.sheets['All Sectors Comparison']
+            ws_comp.freeze_panes = 'A2'
             for row in ws_comp.iter_rows(min_row=2, min_col=3, max_col=5):
                 for cell in row:
                     cell.number_format = acct_fmt
@@ -1505,6 +1510,7 @@ def _sector_detailed_excel_bytes(
             ],
         })
         summary.to_excel(writer, index=False, sheet_name='Summary')
+        writer.sheets['Summary'].freeze_panes = 'A2'
 
     return buf.getvalue()
 

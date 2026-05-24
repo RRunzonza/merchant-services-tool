@@ -153,6 +153,8 @@ def _write_formatted_sheet(writer, df, sheet_name):
     clean.to_excel(writer, index=False, sheet_name=sheet_name)
     ws = writer.sheets[sheet_name]
 
+    ws.freeze_panes(1, 0)
+
     for ci, col_name in enumerate(clean.columns):
         ws.write(0, ci, str(col_name), header_fmt)
 
@@ -187,6 +189,8 @@ def _write_gainers_excel(gainers_df):
 
         data.to_excel(writer, index=False, sheet_name='Gainers and Shakers')
         ws = writer.sheets['Gainers and Shakers']
+
+        ws.freeze_panes(1, 0)
 
         for ci, hdr in enumerate(cols):
             ws.write(0, ci, hdr, hdr_fmt)
@@ -239,8 +243,31 @@ def _build_report_sheets(rpt_df):
 
     used_names = set(sheets.keys())
     for cif in eligible:
-        cif_data   = rpt_df[rpt_df['CIF'] == cif]
-        sheet_name = CIF_SHEET_NAMES.get(cif, str(cif_data['MERCHANT NAME'].iloc[0]).split()[0])[:31]
+        # Skip zero/null CIFs — these are placeholder rows where the CIF column
+        # held 0, 0.0, or NaN; after zfill they become '000000' or contain 'nan'.
+        _cif_str = str(cif)
+        if not _cif_str or _cif_str.lstrip('0') == '' or 'nan' in _cif_str.lower():
+            continue
+
+        cif_data = rpt_df[rpt_df['CIF'] == cif]
+        if cif in CIF_SHEET_NAMES:
+            _derived = CIF_SHEET_NAMES[cif]
+        else:
+            # Find first genuinely valid merchant name for this CIF.
+            # Exclude empty strings, 'nan'/'none', and zero-valued numerics
+            # ('0', '0.0') that pandas produces when a cell held the integer 0.
+            _names = (
+                cif_data['MERCHANT NAME']
+                .dropna()
+                .astype(str)
+                .str.strip()
+            )
+            _invalid = {'', 'nan', 'none', '0', '0.0', '0.00'}
+            _names = _names[~_names.str.lower().isin(_invalid)]
+            if _names.empty:
+                continue  # No real merchant name — omit this CIF entirely
+            _derived = _names.iloc[0].split()[0]
+        sheet_name = _derived[:31]
         if sheet_name in used_names:
             sheet_name = (sheet_name[:27] + '_' + cif[-3:])[:31]
         used_names.add(sheet_name)
@@ -259,6 +286,8 @@ def _build_gainers_shakers(report_sheets, date_map, latest_col_name, threshold):
 
     records = []
     for sheet_name, data in report_sheets.items():
+        if str(sheet_name).strip().lower() in ('nan', 'none', ''):
+            continue
         if latest_col_name not in data.columns:
             continue
 
@@ -575,8 +604,9 @@ def build_top25_excel_bytes(top_25):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         top_25[['CIF', 'MERCHANT NAME', 'Revenue', 'BUSINESS UNIT', 'Revenue Percentage']].to_excel(
-            writer, index=False
+            writer, index=False, sheet_name='Top 25'
         )
+        writer.sheets['Top 25'].freeze_panes(1, 0)
     return output.getvalue()
 
 
@@ -667,6 +697,13 @@ def merchant_period_excel_bytes(filt_zwg, filt_usd, zwg_period_cols, usd_period_
         df = frame[avail_fixed + avail_period].copy()
         for col in avail_period:
             df[col] = _to_numeric(df[col])
+        # The all-sheets concat gives one row per TID per month-sheet.
+        # Collapse duplicates: sum period columns, keep first value for text.
+        if 'TID' in df.columns:
+            agg = {c: 'first' for c in avail_fixed if c != 'TID'}
+            agg.update({c: 'sum' for c in avail_period})
+            df = df.groupby('TID', as_index=False).agg(agg)
+            df = df[[c for c in avail_fixed + avail_period if c in df.columns]]
         df['TOTAL'] = df[avail_period].sum(axis=1)
         return df
 
@@ -692,6 +729,7 @@ def idle_excel_bytes(df):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Idle Terminals')
+        writer.sheets['Idle Terminals'].freeze_panes(1, 0)
     return buf.getvalue()
 
 
@@ -1493,7 +1531,14 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                     if isinstance(_cell.value, str) and _cell.value.startswith('='):
                         _cell.value = None
 
-        # Freeze the first row so it stays visible when scrolling
+        # Clear the stale SheetView-level topLeftCell that pins the scroll
+        # position to the last-inserted row (causing the bounce-back), then
+        # freeze row 1 so the header stays visible while scrolling.
+        try:
+            for _sv in _ws.views.sheetView:
+                _sv.topLeftCell = None
+        except Exception:
+            pass
         _ws.freeze_panes = 'A2'
 
     buf = io.BytesIO()
