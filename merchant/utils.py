@@ -239,19 +239,30 @@ def _build_report_sheets(rpt_df):
 
     used_names = set(sheets.keys())
     for cif in eligible:
+        # Skip zero/null CIFs — these are placeholder rows where the CIF column
+        # held 0, 0.0, or NaN; after zfill they become '000000' or contain 'nan'.
+        _cif_str = str(cif)
+        if not _cif_str or _cif_str.lstrip('0') == '' or 'nan' in _cif_str.lower():
+            continue
+
         cif_data = rpt_df[rpt_df['CIF'] == cif]
         if cif in CIF_SHEET_NAMES:
             _derived = CIF_SHEET_NAMES[cif]
         else:
-            # Find first non-null, non-empty merchant name for this CIF
+            # Find first genuinely valid merchant name for this CIF.
+            # Exclude empty strings, 'nan'/'none', and zero-valued numerics
+            # ('0', '0.0') that pandas produces when a cell held the integer 0.
             _names = (
                 cif_data['MERCHANT NAME']
                 .dropna()
                 .astype(str)
                 .str.strip()
             )
-            _names = _names[~_names.str.lower().isin(['', 'nan', 'none'])]
-            _derived = _names.iloc[0].split()[0] if not _names.empty else cif
+            _invalid = {'', 'nan', 'none', '0', '0.0', '0.00'}
+            _names = _names[~_names.str.lower().isin(_invalid)]
+            if _names.empty:
+                continue  # No real merchant name — omit this CIF entirely
+            _derived = _names.iloc[0].split()[0]
         sheet_name = _derived[:31]
         if sheet_name in used_names:
             sheet_name = (sheet_name[:27] + '_' + cif[-3:])[:31]
@@ -1523,10 +1534,15 @@ def update_merchant_report(report_bytes, b02_totals, currency):
             _sv = _ws.sheet_view
             if _sv.pane:
                 _sv.pane.topLeftCell = 'A2'
-            _sv.selection = [
-                _Sel(pane='topLeft',    activeCell='A1', sqref='A1'),
-                _Sel(pane='bottomLeft', activeCell='A2', sqref='A2'),
-            ]
+            # Mutate the list in-place — direct reassignment (_sv.selection = [...])
+            # can replace the Sequence descriptor's tracked list with a plain Python
+            # list, which openpyxl then serialises to malformed XML and Excel rejects
+            # the file as corrupted.
+            _sel = _sv.selection
+            if _sel is not None:
+                del _sel[:]
+                _sel.append(_Sel(pane='topLeft',    activeCell='A1', sqref='A1'))
+                _sel.append(_Sel(pane='bottomLeft', activeCell='A2', sqref='A2'))
         except Exception:
             pass
 
