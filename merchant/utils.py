@@ -219,7 +219,7 @@ def _write_formatted_sheet(writer, df, sheet_name):
     for ci, col_name in enumerate(clean.columns):
         parsed = _parse_col_date(col_name)
         if pd.notnull(parsed):
-            # Write as a real Excel date value — eliminates green triangles permanently
+            # Write as a real Excel date value - eliminates green triangles permanently
             ws.write_datetime(0, ci, parsed.to_pydatetime().replace(tzinfo=None), date_hdr_fmt)
         else:
             ws.write(0, ci, str(col_name), header_fmt)
@@ -310,7 +310,7 @@ def _build_report_sheets(rpt_df):
 
     used_names = set(sheets.keys())
     for cif in eligible:
-        # Skip zero/null CIFs — these are placeholder rows where the CIF column
+        # Skip zero/null CIFs - these are placeholder rows where the CIF column
         # held 0, 0.0, or NaN; after zfill they become '000000' or contain 'nan'.
         _cif_str = str(cif)
         if not _cif_str or _cif_str.lstrip('0') == '' or 'nan' in _cif_str.lower():
@@ -332,7 +332,7 @@ def _build_report_sheets(rpt_df):
             _invalid = {'', 'nan', 'none', '0', '0.0', '0.00'}
             _names = _names[~_names.str.lower().isin(_invalid)]
             if _names.empty:
-                continue  # No real merchant name — omit this CIF entirely
+                continue  # No real merchant name - omit this CIF entirely
             _derived = _names.iloc[0].split()[0]
         sheet_name = _derived[:31]
         if sheet_name in used_names:
@@ -503,10 +503,10 @@ def build_top15_data(df, date_map, latest_date_obj, latest_col_name, prev_date_o
 
     metrics = {
         'total_revenue':     f'{total_day_rev:,.0f}',
-        'mtd_revenue':       '—',
+        'mtd_revenue':       '-',
         'active_merchants':  summary['CIF'].nunique(),
         'active_terminals':  int(summary['Active_Terminals'].sum()),
-        'top_merchant':      top_15.iloc[0]['Merchant'] if not top_15.empty else '—',
+        'top_merchant':      top_15.iloc[0]['Merchant'] if not top_15.empty else '-',
         'display_date':      latest_date_obj.strftime('%d %b %Y'),
     }
 
@@ -738,7 +738,7 @@ def build_merchant_revenue_chart(daily_zwg, daily_usd, merchant_name, date_label
         ))
     fig.update_layout(
         title=dict(
-            text=f'{merchant_name} — Daily Revenue | {date_label}',
+            text=f'{merchant_name} - Daily Revenue | {date_label}',
             font=dict(color='#e8f4fd', size=14, family='Arial Black'), x=0.01,
         ),
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(255,255,255,0.04)',
@@ -803,7 +803,7 @@ def idle_excel_bytes(df):
 def _recalc_total_col(frame):
     """
     Return a copy of *frame* where the TOTAL column is recomputed from scratch
-    as the row-wise sum of every date column (beginning of month → current date).
+    as the row-wise sum of every date column (beginning of month -> current date).
 
     This corrects TIDs whose TOTAL cell was missing, zero, or came from an
     Excel formula whose range did not cover all date columns (a common cause of
@@ -818,9 +818,9 @@ def _recalc_total_col(frame):
     # Identify all date columns present after STMT_HIDE_PATTERNS columns were dropped
     date_cols = [c for c in df.columns if pd.notnull(_parse_col_date(c))]
     if not date_cols:
-        return df  # Nothing to sum — leave frame unchanged
+        return df  # Nothing to sum - leave frame unchanged
 
-    # Coerce every date column to numeric (blanks / dashes → 0)
+    # Coerce every date column to numeric (blanks / dashes -> 0)
     for col in date_cols:
         if not pd.api.types.is_numeric_dtype(df[col]):
             df[col] = _to_numeric(df[col])
@@ -930,7 +930,7 @@ def validate_b02_file(raw_bytes, fname):
       6. Currency column (col10) contains only ZWG / USD
       7. "Net Surcharge" per-terminal footer rows are present
     """
-    # 1 ── Readable as Excel ────────────────────────────────────────────────────
+    # 1 -- Readable as Excel ----------------------------------------------------
     try:
         df = _read_b02_df(raw_bytes, fname)
     except Exception as e:
@@ -941,10 +941,10 @@ def validate_b02_file(raw_bytes, fname):
             f'Please upload an original NBS B02 Balancing Terminal Detail file.'
         )
 
-    # 2 ── Minimum columns ─────────────────────────────────────────────────────
+    # 2 -- Minimum columns -----------------------------------------------------
     if df.empty or df.shape[1] < 11:
         return (
-            f'"{fname}" does not appear to be a B02 report — '
+            f'"{fname}" does not appear to be a B02 report - '
             f'expected at least 11 columns but found {df.shape[1]}. '
             f'Please upload an original NBS B02 Balancing Terminal Detail file.'
         )
@@ -954,8 +954,8 @@ def validate_b02_file(raw_bytes, fname):
     col1_raw = df.iloc[:, 1]
     col3_str = df.iloc[:, 3].fillna('').astype(str).str.strip().str.lower()
 
-    # 3 ── TID header rows ─────────────────────────────────────────────────────
-    # col1 must be blank (NaN or empty string — xlrd can return either)
+    # 3 -- TID header rows -----------------------------------------------------
+    # col1 must be blank (NaN or empty string - xlrd can return either)
     tid_mask = col0_str.str.upper().str.startswith('NB') & _col_is_blank(col1_raw)
     if not tid_mask.any():
         return (
@@ -967,7 +967,7 @@ def validate_b02_file(raw_bytes, fname):
             f'Please upload an original NBS B02 Balancing Terminal Detail file.'
         )
 
-    # 4 ── Transaction rows have datetime values in col0 ───────────────────────
+    # 4 -- Transaction rows have datetime values in col0 -----------------------
     non_tid = ~tid_mask & col0_str.ne('')
     dt_count = pd.to_datetime(col0_raw[non_tid], errors='coerce').notna().sum()
     if dt_count == 0:
@@ -978,7 +978,7 @@ def validate_b02_file(raw_bytes, fname):
             f'Please upload an original NBS B02 Balancing Terminal Detail file.'
         )
 
-    # 5 ── Known B02 transaction types in col3 ─────────────────────────────────
+    # 5 -- Known B02 transaction types in col3 ---------------------------------
     if not col3_str.isin(_B02_KNOWN_TYPES).any():
         return (
             f'"{fname}" does not appear to be a B02 report. '
@@ -987,7 +987,7 @@ def validate_b02_file(raw_bytes, fname):
             f'Please upload an original NBS B02 Balancing Terminal Detail file.'
         )
 
-    # 6 ── Currency column contains only ZWG / USD ─────────────────────────────
+    # 6 -- Currency column contains only ZWG / USD -----------------------------
     currencies = (
         df.iloc[:, 10].dropna().astype(str).str.strip().str.upper()
     )
@@ -1004,7 +1004,7 @@ def validate_b02_file(raw_bytes, fname):
                 f'Please upload a file generated by the NBS switch.'
             )
 
-    # 7 ── "Net Surcharge" per-terminal footer rows ────────────────────────────
+    # 7 -- "Net Surcharge" per-terminal footer rows ----------------------------
     if not col0_str.str.lower().str.startswith('net surcharge').any():
         return (
             f'"{fname}" does not appear to be a B02 Balancing Terminal Detail report. '
@@ -1063,7 +1063,7 @@ def parse_b02_files(file_list):
             except Exception:
                 pass
         if business_date is None:
-            continue  # cannot determine business date — skip file
+            continue  # cannot determine business date - skip file
 
         current_tid = None
         for _, row in df.iterrows():
@@ -1091,7 +1091,7 @@ def parse_b02_files(file_list):
             col3 = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
             col5 = str(row.iloc[5]).strip() if pd.notna(row.iloc[5]) else ''
 
-            # Only "Goods and services" (plain) — exclude "Goods services with cash back"
+            # Only "Goods and services" (plain) - exclude "Goods services with cash back"
             # because for cash-back transactions the gross amount includes cash dispensed
             # to the customer, which is not merchant goods revenue.
             col3_lower = col3.lower()
@@ -1201,7 +1201,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
         if not matching_b02_dates:
             continue
 
-        # ── Detect the accounting number format used by existing data cells ──
+        # -- Detect the accounting number format used by existing data cells --
         # Scan the first few data rows/date columns for a non-General format.
         num_fmt = _FALLBACK_FMT
         sample_cols = list(date_col_map.values())[:5]
@@ -1252,7 +1252,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 _mdr_col = header_map[_mdr_name]
                 break
 
-        # ── Detect bold columns and right-border columns from a reference row ──
+        # -- Detect bold columns and right-border columns from a reference row --
         # Scan early data rows to find which columns should be bold and which
         # carry a right-side border (e.g. the TOTAL meta-column separator).
         # Store complete Font objects (not bare Font(bold=True)) to avoid
@@ -1293,7 +1293,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
         # Track which TIDs were touched per B02 date (for zero-fill pass)
         touched_per_date = {d: set() for d in matching_b02_dates}
 
-        # ── Apply B02 data ────────────────────────────────────────────────────
+        # -- Apply B02 data ----------------------------------------------------
         for (tid, txn_date), amount in relevant.items():
             if txn_date not in date_col_map:
                 continue
@@ -1317,7 +1317,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 modified_rows.add(r)
                 stats['updated'] += 1
             else:
-                # ── Insert new row just before the TOTAL row ─────────────────
+                # -- Insert new row just before the TOTAL row -----------------
                 ws.insert_rows(total_row)
                 new_row = total_row
                 total_row += 1
@@ -1371,7 +1371,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
 
             touched_per_date[txn_date].add(tid)
 
-        # ── Zero-fill existing TIDs that did NOT transact on each B02 date ───
+        # -- Zero-fill existing TIDs that did NOT transact on each B02 date ---
         # The B02 only lists terminals that transacted; all others get 0 ('-').
         for txn_date in matching_b02_dates:
             target_col = date_col_map[txn_date]
@@ -1380,12 +1380,12 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                     continue  # already set above
                 cell = ws.cell(r, target_col)
                 current = cell.value
-                # Only fill blank / dash / NaN cells — don't overwrite real values
+                # Only fill blank / dash / NaN cells - don't overwrite real values
                 if current is None or str(current).strip() in ('', '-', 'nan', '0'):
                     cell.value = 0
                     cell.number_format = num_fmt
 
-        # ── Recalculate TOTAL meta-column for rows we modified ────────────────
+        # -- Recalculate TOTAL meta-column for rows we modified ----------------
         if total_meta_col:
             for r in modified_rows:
                 row_total = 0.0
@@ -1400,7 +1400,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 cell.value = round(row_total, 2)
                 cell.number_format = num_fmt
 
-        # ── Recalculate TOTAL row (sum of each date column, all data rows) ──────
+        # -- Recalculate TOTAL row (sum of each date column, all data rows) ------
         for d, col in date_col_map.items():
             col_sum = 0.0
             for r in range(2, total_row):
@@ -1412,9 +1412,9 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                         pass
             ws.cell(total_row, col).value = round(col_sum, 2)
 
-        # ── Recalculate TOTAL row's TOTAL meta-column ──────────────────────────
+        # -- Recalculate TOTAL row's TOTAL meta-column --------------------------
         # The TOTAL row's date columns were just recomputed above to reflect ALL
-        # data rows (including any newly inserted ones).  Sum them directly — this
+        # data rows (including any newly inserted ones).  Sum them directly - this
         # equals the sum of every row's TOTAL column and gives the true MTD figure.
         if total_meta_col:
             total_row_sum = 0.0
@@ -1427,13 +1427,13 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                         pass
             ws.cell(total_row, total_meta_col).value = round(total_row_sum, 2)
 
-        # ── REVENUE column in TOTAL row: leave original formula intact ─────────
+        # -- REVENUE column in TOTAL row: leave original formula intact ---------
         # Per-row REVENUE cells are =MDR*TOTAL formulas whose current values are
         # formula strings (data_only=False load).  Attempting float() on them
         # gives 0.  We skip recomputation and let Excel re-evaluate the
         # existing =SUM(H2:H...) formula on open.
 
-        # ── Enforce continuous border on the entire TOTAL row ────────────────
+        # -- Enforce continuous border on the entire TOTAL row ----------------
         # Restore the original borders first, then guarantee a uniform top+bottom
         # border across every cell so the separator line is unbroken.
         for _rc, _rb in _saved_total_borders.items():
@@ -1487,7 +1487,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 bottom=_bot_side,
             )
 
-        # ── Accumulate per-date totals for VISUALS sheet ──────────────────────
+        # -- Accumulate per-date totals for VISUALS sheet ----------------------
         # Read the now-recalculated TOTAL row for every date column on this sheet
         # and add to the workbook-level running totals.
         for _d, _col in date_col_map.items():
@@ -1498,7 +1498,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 except (ValueError, TypeError):
                     pass
 
-    # ── Update VISUALS sheet ──────────────────────────────────────────────────
+    # -- Update VISUALS sheet --------------------------------------------------
     # Use case-insensitive lookup for the VISUALS sheet name.
     _visuals_sn = next(
         (s for s in wb.sheetnames if s.strip().upper() == 'VISUALS'), None
@@ -1541,7 +1541,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                     except Exception:
                         pass
                 else:
-                    # 3. String — try our column-header parser first
+                    # 3. String - try our column-header parser first
                     try:
                         _pp = _parse_col_date(str(_cv))
                         if pd.notna(_pp):
@@ -1559,7 +1559,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
                 if _parsed_date is not None and _parsed_date in _all_date_totals:
                     _vws.cell(_dep_row_num, _c).value = round(_all_date_totals[_parsed_date], 2)
 
-    # ── Pre-save cleanup ──────────────────────────────────────────────────────
+    # -- Pre-save cleanup ------------------------------------------------------
     from openpyxl.formatting.formatting import ConditionalFormattingList as _CFList
 
     # Clear workbook-level defined names (print areas, print titles, named ranges)
@@ -1625,7 +1625,7 @@ def update_merchant_report(report_bytes, b02_totals, currency):
             _sv = _ws.sheet_view
             if _sv.pane:
                 _sv.pane.topLeftCell = 'A2'
-            # Mutate the list in-place — direct reassignment (_sv.selection = [...])
+            # Mutate the list in-place - direct reassignment (_sv.selection = [...])
             # can replace the Sequence descriptor's tracked list with a plain Python
             # list, which openpyxl then serialises to malformed XML and Excel rejects
             # the file as corrupted.
