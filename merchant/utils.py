@@ -84,7 +84,66 @@ STMT_HIDE_PATTERNS = {'REVENUE', 'COMMISSION', 'COMM'}
 # =============================================================================
 
 def normalize_columns(df):
-    df.columns = df.columns.astype(str).str.strip().str.upper()
+    """Strip and uppercase all column names.
+
+    Guards against pandas converting date-formatted header cells to Timestamp /
+    datetime objects (which stringify as '2026-04-01 00:00:00').  Any Timestamp
+    column name is reformatted as DD-MMM-YY (e.g. '01-APR-26').
+    """
+    import datetime as _dt
+
+    def _clean(c):
+        if isinstance(c, pd.Timestamp):
+            return c.strftime('%d-%b-%y').upper()
+        if isinstance(c, (_dt.datetime, _dt.date)):
+            return pd.Timestamp(c).strftime('%d-%b-%y').upper()
+        return str(c).strip().upper()
+
+    df.columns = [_clean(c) for c in df.columns]
+    return df
+
+
+def read_excel_with_preserved_headers(source, sheet_name=0):
+    """Read an Excel sheet preserving date column header strings verbatim.
+
+    pandas silently converts date-formatted header cells to Timestamp objects
+    during a normal pd.read_excel call.  This helper reads the header row
+    separately with ``dtype=object`` (which bypasses type inference) so that
+    cells whose *value* is already a text string (e.g. "1 April 2026") come
+    back as the original string rather than a Timestamp, while cells that ARE
+    genuine date objects get formatted as DD-MMM-YY (no time component).
+
+    Equivalent to ``normalize_columns(pd.read_excel(source, sheet_name))``,
+    but without '2026-04-01 00:00:00' garbage in date column headers.
+    """
+    import datetime as _dt
+
+    try:
+        hdr_df = pd.read_excel(
+            source, sheet_name=sheet_name,
+            header=None, nrows=1, dtype=object,
+        )
+        raw_headers = list(hdr_df.iloc[0])
+    except Exception:
+        raw_headers = None
+
+    df = pd.read_excel(source, sheet_name=sheet_name)
+
+    if raw_headers is not None and len(raw_headers) == len(df.columns):
+        new_cols = []
+        for val in raw_headers:
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                new_cols.append('')
+            elif isinstance(val, pd.Timestamp):
+                new_cols.append(val.strftime('%d-%b-%y').upper())
+            elif isinstance(val, (_dt.datetime, _dt.date)):
+                new_cols.append(pd.Timestamp(val).strftime('%d-%b-%y').upper())
+            else:
+                new_cols.append(str(val).strip().upper())
+        df.columns = new_cols
+    else:
+        df = normalize_columns(df)
+
     return df
 
 
@@ -733,49 +792,80 @@ def idle_excel_bytes(df):
     return buf.getvalue()
 
 
-def pos_statement_bytes(filt_zwg, filt_usd):
-    def _clean(frame):
-        return frame.drop(
-            columns=[c for c in frame.columns if any(p in c.upper() for p in STMT_HIDE_PATTERNS)],
-            errors='ignore',
-        )
+def _recalc_total_col(frame):
+    """
+    Return a copy of *frame* where the TOTAL column is recomputed from scratch
+    as the row-wise sum of every date column (beginning of month → current date).
 
+    This corrects TIDs whose TOTAL cell was missing, zero, or came from an
+    Excel formula whose range did not cover all date columns (a common cause of
+    under-reported POS statement totals).
+
+    If the frame has no TOTAL column one is inserted immediately after the last
+    date column.  Date columns that are still object-typed are coerced to numeric
+    before summing so that text dashes ("-") and blanks count as zero.
+    """
+    df = frame.copy()
+
+    # Identify all date columns present after STMT_HIDE_PATTERNS columns were dropped
+    date_cols = [c for c in df.columns if pd.notnull(_parse_col_date(c))]
+    if not date_cols:
+        return df  # Nothing to sum — leave frame unchanged
+
+    # Coerce every date column to numeric (blanks / dashes → 0)
+    for col in date_cols:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = _to_numeric(df[col])
+        else:
+            df[col] = df[col].fillna(0)
+
+    # Recompute TOTAL as row-wise sum of ALL date columns
+    recalculated = df[date_cols].sum(axis=1)
+
+    if 'TOTAL' in df.columns:
+        df['TOTAL'] = recalculated
+    else:
+        # Insert TOTAL column right after the last date column
+        last_date_pos = max(df.columns.get_loc(c) for c in date_cols)
+        df.insert(last_date_pos + 1, 'TOTAL', recalculated)
+
+    return df
+
+
+def _clean_stmt(frame):
+    """Drop hidden columns (REVENUE, COMMISSION, COMM) then fix the TOTAL column."""
+    df = frame.drop(
+        columns=[c for c in frame.columns if any(p in c.upper() for p in STMT_HIDE_PATTERNS)],
+        errors='ignore',
+    )
+    return _recalc_total_col(df)
+
+
+def pos_statement_bytes(filt_zwg, filt_usd):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        _write_formatted_sheet(writer, _clean(filt_zwg), 'ZWG')
-        _write_formatted_sheet(writer, _clean(filt_usd), 'USD')
+        _write_formatted_sheet(writer, _clean_stmt(filt_zwg), 'ZWG')
+        _write_formatted_sheet(writer, _clean_stmt(filt_usd), 'USD')
     return buf.getvalue()
 
 
 def champions_zinara_bytes(filt_zwg, filt_usd):
-    def _clean(frame):
-        return frame.drop(
-            columns=[c for c in frame.columns if any(p in c.upper() for p in STMT_HIDE_PATTERNS)],
-            errors='ignore',
-        )
-
     zinara_zwg = filt_zwg[filt_zwg['TID'].str.contains('NBSP', case=False, na=False)]
     zinara_usd = filt_usd[filt_usd['TID'].str.contains('NBSP', case=False, na=False)]
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        _write_formatted_sheet(writer, _clean(zinara_zwg), 'ZWG')
-        _write_formatted_sheet(writer, _clean(zinara_usd), 'USD')
+        _write_formatted_sheet(writer, _clean_stmt(zinara_zwg), 'ZWG')
+        _write_formatted_sheet(writer, _clean_stmt(zinara_usd), 'USD')
     return buf.getvalue()
 
 
 def champions_insurance_bytes(filt_zwg, filt_usd):
-    def _clean(frame):
-        return frame.drop(
-            columns=[c for c in frame.columns if any(p in c.upper() for p in STMT_HIDE_PATTERNS)],
-            errors='ignore',
-        )
-
     insur_zwg = filt_zwg[filt_zwg['TID'].str.contains('NBSX', case=False, na=False)]
     insur_usd = filt_usd[filt_usd['TID'].str.contains('NBSU', case=False, na=False)]
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        _write_formatted_sheet(writer, _clean(insur_zwg), 'ZWG')
-        _write_formatted_sheet(writer, _clean(insur_usd), 'USD')
+        _write_formatted_sheet(writer, _clean_stmt(insur_zwg), 'ZWG')
+        _write_formatted_sheet(writer, _clean_stmt(insur_usd), 'USD')
     return buf.getvalue()
 
 
@@ -1062,16 +1152,23 @@ def update_merchant_report(report_bytes, b02_totals, currency):
             continue
 
         # Read header row
+        # openpyxl returns datetime objects for date-formatted cells; convert
+        # them to a clean DD-MMM-YY string so header_map keys are consistent.
+        import datetime as _dt_hdr
         header_map = {}
         for c in range(1, ws.max_column + 1):
             val = ws.cell(1, c).value
             if val is not None:
-                header_map[str(val).strip().upper()] = c
+                if isinstance(val, (_dt_hdr.datetime, _dt_hdr.date)):
+                    _hk = pd.Timestamp(val).strftime('%d-%b-%y').upper()
+                else:
+                    _hk = str(val).strip().upper()
+                header_map[_hk] = c
 
         if 'TID' not in header_map:
             continue
 
-        tid_col       = header_map['TID']
+        tid_col        = header_map['TID']
         total_meta_col = header_map.get('TOTAL')
         revenue_col    = header_map.get('REVENUE')
 
@@ -1080,9 +1177,12 @@ def update_merchant_report(report_bytes, b02_totals, currency):
         for c in range(1, ws.max_column + 1):
             val = ws.cell(1, c).value
             if val is not None:
-                parsed = _parse_col_date(str(val))
-                if pd.notna(parsed):
-                    date_col_map[parsed.date()] = c
+                if isinstance(val, (_dt_hdr.datetime, _dt_hdr.date)):
+                    _parsed = pd.Timestamp(val)
+                else:
+                    _parsed = _parse_col_date(str(val))
+                if pd.notna(_parsed):
+                    date_col_map[_parsed.date()] = c
 
         if not date_col_map:
             continue

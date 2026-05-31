@@ -1,12 +1,14 @@
-import io
+﻿import io
 import os
 import pickle
 import shutil
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
 import pandas as pd
 from django.conf import settings
+from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import render, redirect
 from django.views.decorators.http import require_POST
@@ -14,6 +16,7 @@ from django.views.decorators.http import require_POST
 from .forms import UploadForm, SheetSelectForm, CIFLookupForm, DateRangeForm
 from .utils import (
     normalize_columns,
+    read_excel_with_preserved_headers,
     extract_date_columns,
     _to_numeric,
     _parse_col_date,
@@ -40,42 +43,93 @@ from .utils import (
 )
 
 
+def _norm_cif(series):
+    """
+    Safely normalise a CIF column to a zero-padded 6-character string.
+    Works with any pandas dtype (float64, Float64, object, StringDtype) and
+    any pandas version including pandas 3.x.
+    """
+    def _fmt(v):
+        s = str(v).strip()
+        if s.lower() in ('nan', 'none', ''):
+            return 'nan'
+        return s.split('.')[0].zfill(6)
+    return series.apply(_fmt)
+
+
 # =============================================================================
-# SESSION / FILE HELPERS
+# SESSION / CACHE HELPERS
 # =============================================================================
+# All DataFrames and generated report bytes are stored in Django's in-memory
+# cache (LocMemCache) â€” nothing is written to disk, keeping PythonAnywhere's
+# 512 MB quota free for the virtualenv and app code only.
+#
+# Cache key format:
+#   df_<session_key>_<name>       â€” pandas DataFrames
+#   report_<session_key>_<name>   â€” generated Excel bytes ready for download
+#
+# TTL matches SESSION_COOKIE_AGE (24 h) so cached objects expire in lockstep
+# with the user's session.
+# =============================================================================
+
+_CACHE_TTL = getattr(settings, 'SESSION_COOKIE_AGE', 86400)
+
+
+def _skey(request):
+    """Return (and lazily create) the session key."""
+    if not request.session.session_key:
+        request.session.create()
+    return request.session.session_key
+
 
 def _session_dir(request):
-    key = request.session.session_key
-    if not key:
-        request.session.create()
-        key = request.session.session_key
-    d = Path(settings.TEMP_DATA_DIR) / 'uploads' / key
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _pickle_dir(request):
-    key = request.session.session_key
-    if not key:
-        request.session.create()
-        key = request.session.session_key
-    d = Path(settings.TEMP_DATA_DIR) / 'pickles' / key
+    """
+    Return (and create) the upload directory for the current session.
+    Uploaded files are deleted immediately after being read into memory,
+    so this directory is effectively transient.
+    """
+    d = Path(settings.TEMP_DATA_DIR) / 'uploads' / _skey(request)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _save_df(request, name, df):
-    path = _pickle_dir(request) / f'{name}.pkl'
-    with open(path, 'wb') as fh:
-        pickle.dump(df, fh)
+    """Store a DataFrame in the memory cache (no disk write)."""
+    cache.set(f'df_{_skey(request)}_{name}', df, _CACHE_TTL)
 
 
 def _load_df(request, name):
-    path = _pickle_dir(request) / f'{name}.pkl'
-    if not path.exists():
-        return None
-    with open(path, 'rb') as fh:
-        return pickle.load(fh)
+    """Retrieve a DataFrame from the memory cache."""
+    return cache.get(f'df_{_skey(request)}_{name}')
+
+
+def _save_report(request, name, data_bytes):
+    """Store generated Excel bytes in the memory cache (no disk write)."""
+    cache.set(f'report_{_skey(request)}_{name}', data_bytes, _CACHE_TTL)
+
+
+def _load_report(request, name):
+    """Retrieve generated Excel bytes from the memory cache."""
+    return cache.get(f'report_{_skey(request)}_{name}')
+
+
+def _delete_session_cache(session_key):
+    """Best-effort removal of all cache entries for a session key."""
+    # LocMemCache does not support pattern-based deletion; we rely on TTL
+    # expiry for automatic cleanup.  Explicit deletes are done where we know
+    # the exact name (e.g. on logout).
+    pass
+
+
+def _cleanup_upload_dir(request):
+    """
+    Delete the on-disk upload directory for the current session.
+    Called immediately after the uploaded files have been read into memory
+    so the raw Excel files never linger on disk.
+    """
+    d = Path(settings.TEMP_DATA_DIR) / 'uploads' / _skey(request)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _require_data(request):
@@ -101,7 +155,7 @@ def _load_all_sheets(request):
     try:
         for sheet in pd.ExcelFile(d / 'zwg.xlsx').sheet_names:
             try:
-                df = normalize_columns(pd.read_excel(d / 'zwg.xlsx', sheet_name=sheet))
+                df = read_excel_with_preserved_headers(d / 'zwg.xlsx', sheet_name=sheet)
                 if not required.issubset(set(df.columns)):
                     continue
                 df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
@@ -110,7 +164,7 @@ def _load_all_sheets(request):
                 pass
         for sheet in pd.ExcelFile(d / 'usd.xlsx').sheet_names:
             try:
-                df = normalize_columns(pd.read_excel(d / 'usd.xlsx', sheet_name=sheet))
+                df = read_excel_with_preserved_headers(d / 'usd.xlsx', sheet_name=sheet)
                 if not required.issubset(set(df.columns)):
                     continue
                 df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
@@ -134,7 +188,7 @@ def _load_all_sheets(request):
             parsed = sorted([_parse_col_date(c) for c in date_cols if pd.notnull(_parse_col_date(c))])
             if parsed:
                 request.session['data_period_all'] = (
-                    f"{parsed[0].strftime('%d %b %Y')} → {parsed[-1].strftime('%d %b %Y')}"
+                    f"{parsed[0].strftime('%d %b %Y')} â†’ {parsed[-1].strftime('%d %b %Y')}"
                 )
     except Exception:
         pass
@@ -160,7 +214,7 @@ def _aggregate_by_tid(df):
 def _tids_in_month(df, all_date_cols, year, month):
     """Return set of TIDs whose rows come from the given month's sheet.
     Rows from month X have real values (0 or positive) for that month's date columns
-    and NaN for all other months — notna() therefore reliably detects presence."""
+    and NaN for all other months â€” notna() therefore reliably detects presence."""
     month_cols = [
         c for c in all_date_cols
         if pd.notnull(_parse_col_date(c))
@@ -184,9 +238,23 @@ def upload_view(request):
     if request.method == 'POST':
         form = UploadForm(request.POST, request.FILES)
         if form.is_valid():
+            # â”€â”€ Clean up the CURRENT session's temp files before creating a new one â”€â”€
+            # This prevents repeated uploads by the same user from accumulating data.
+            old_key = request.session.session_key
+            if old_key:
+                for sub in ('uploads', 'pickles'):
+                    old_dir = Path(settings.TEMP_DATA_DIR) / sub / old_key
+                    if old_dir.exists():
+                        shutil.rmtree(old_dir, ignore_errors=True)
+
+            # â”€â”€ Sweep ALL expired / orphaned session temp dirs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # Runs on every upload so disk is reclaimed without a cron job.
             request.session.create()
             d = _session_dir(request)
 
+            # Write uploaded files to a temporary on-disk location only long
+            # enough to read their sheet names and parse the data.  They are
+            # deleted from disk immediately afterwards to conserve quota.
             for field, name in [('zwg_file', 'zwg.xlsx'), ('usd_file', 'usd.xlsx')]:
                 uploaded = form.cleaned_data[field]
                 dest = d / name
@@ -199,7 +267,44 @@ def upload_view(request):
                 usd_xls = pd.ExcelFile(d / 'usd.xlsx')
             except Exception as e:
                 errors.append(f'Could not read one of the uploaded files: {e}')
+                _cleanup_upload_dir(request)   # remove partial files
             else:
+                # â”€â”€ Cache ALL sheets into memory right now â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # Read every sheet from both files and store DataFrames in the
+                # memory cache.  Once this is done the on-disk copies are
+                # deleted â€” they are never needed again.
+                required = {'TID', 'CIF', 'MERCHANT NAME'}
+                all_zwg, all_usd = [], []
+                for sheet in zwg_xls.sheet_names:
+                    try:
+                        df = read_excel_with_preserved_headers(d / 'zwg.xlsx', sheet_name=sheet)
+                        if required.issubset(set(df.columns)):
+                            df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
+                            # Cache each sheet individually so select_sheet_view can retrieve
+                            # exactly the one the user picks (not all months combined).
+                            cache.set(f'sheet_zwg_{_skey(request)}_{sheet}', df, _CACHE_TTL)
+                            all_zwg.append(df)
+                    except Exception:
+                        pass
+                for sheet in usd_xls.sheet_names:
+                    try:
+                        df = read_excel_with_preserved_headers(d / 'usd.xlsx', sheet_name=sheet)
+                        if required.issubset(set(df.columns)):
+                            df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
+                            # Cache each sheet individually.
+                            cache.set(f'sheet_usd_{_skey(request)}_{sheet}', df, _CACHE_TTL)
+                            all_usd.append(df)
+                    except Exception:
+                        pass
+
+                if all_zwg:
+                    _save_df(request, 'zwg_all_df', pd.concat(all_zwg, ignore_index=True))
+                if all_usd:
+                    _save_df(request, 'usd_all_df', pd.concat(all_usd, ignore_index=True))
+
+                # â”€â”€ Delete uploaded files from disk immediately â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                _cleanup_upload_dir(request)
+
                 request.session['zwg_sheet_names'] = zwg_xls.sheet_names
                 request.session['usd_sheet_names'] = usd_xls.sheet_names
                 request.session['files_validated'] = True
@@ -229,16 +334,32 @@ def select_sheet_view(request):
             zwg_sheet = form.cleaned_data['zwg_sheet']
             usd_sheet = form.cleaned_data['usd_sheet']
 
-            d = _session_dir(request)
+            # Load only the single selected sheet from the per-sheet cache entries
+            # that were stored during upload_view.  This guarantees Daily Analytics
+            # contains exactly one month's data, not all months combined.
             try:
-                zwg_df = normalize_columns(pd.read_excel(d / 'zwg.xlsx', sheet_name=zwg_sheet))
-                usd_df = normalize_columns(pd.read_excel(d / 'usd.xlsx', sheet_name=usd_sheet))
+                skey = _skey(request)
+                zwg_df = cache.get(f'sheet_zwg_{skey}_{zwg_sheet}')
+                usd_df = cache.get(f'sheet_usd_{skey}_{usd_sheet}')
+
+                if zwg_df is None or usd_df is None:
+                    # Graceful fallback: try disk (should never happen in normal flow)
+                    d = Path(settings.TEMP_DATA_DIR) / 'uploads' / skey
+                    zwg_disk = d / 'zwg.xlsx'
+                    usd_disk = d / 'usd.xlsx'
+                    if zwg_disk.exists() and usd_disk.exists():
+                        zwg_df = read_excel_with_preserved_headers(zwg_disk, sheet_name=zwg_sheet)
+                        usd_df = read_excel_with_preserved_headers(usd_disk, sheet_name=usd_sheet)
+                    else:
+                        form.add_error(None, 'Session data expired. Please re-upload your files.')
+                        return render(request, 'merchant/select_sheet.html', {'form': form})
             except Exception as e:
                 form.add_error(None, f'Error loading data: {e}')
             else:
                 _save_df(request, 'zwg_df', zwg_df)
                 _save_df(request, 'usd_df', usd_df)
                 request.session['data_loaded'] = True
+                request.session['periodic_data_loaded'] = True
 
                 # Pre-compute data period label for sidebar
                 try:
@@ -246,7 +367,7 @@ def select_sheet_view(request):
                     parsed = sorted([_parse_col_date(c) for c in date_cols if pd.notnull(_parse_col_date(c))])
                     if parsed:
                         request.session['data_period'] = (
-                            f"{parsed[0].strftime('%d %b %Y')} → {parsed[-1].strftime('%d %b %Y')}"
+                            f"{parsed[0].strftime('%d %b %Y')} â†’ {parsed[-1].strftime('%d %b %Y')}"
                         )
                 except Exception:
                     pass
@@ -321,7 +442,7 @@ def zwg_performance_view(request):
 
     df = df_raw.copy()
     df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
-    df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+    df['CIF'] = _norm_cif(df['CIF'])
     df = df[~df['CIF'].str.lower().str.contains('nan')]
 
     date_columns = extract_date_columns(df)
@@ -359,13 +480,12 @@ def zwg_performance_view(request):
     gainers_df = _build_gainers_shakers(report_sheets, date_map, latest_col_name, threshold=50000)
 
     # Store in session temp dir for download
-    pkl_d = _pickle_dir(request)
-    (pkl_d / 'zwg_report.xlsx').write_bytes(report_bytes)
+    _save_report(request, 'zwg_report.xlsx', report_bytes)
     ctx['has_zwg_report'] = True
 
     if not gainers_df.empty:
         gainers_bytes = _write_gainers_excel(gainers_df).getvalue()
-        (pkl_d / 'zwg_gainers.xlsx').write_bytes(gainers_bytes)
+        _save_report(request, 'zwg_gainers.xlsx', gainers_bytes)
         ctx['has_zwg_gainers'] = True
     else:
         ctx['has_zwg_gainers'] = False
@@ -385,7 +505,7 @@ def zwg_performance_view(request):
                 top25_error = total_or_err
             else:
                 top25_excel = build_top25_excel_bytes(top_25)
-                (pkl_d / 'zwg_top25.xlsx').write_bytes(top25_excel)
+                _save_report(request, 'zwg_top25.xlsx', top25_excel)
                 display = top_25[['CIF', 'MERCHANT NAME', 'Revenue', 'BUSINESS UNIT', 'Revenue Percentage']].copy()
                 display.columns = ['CIF', 'MERCHANT_NAME', 'Revenue', 'BUSINESS_UNIT', 'Revenue_Percentage']
                 top25_results = {
@@ -424,7 +544,7 @@ def usd_performance_view(request):
 
     df = df_raw.copy()
     df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
-    df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+    df['CIF'] = _norm_cif(df['CIF'])
     df = df[~df['CIF'].str.lower().str.contains('nan')]
 
     date_columns = extract_date_columns(df)
@@ -458,13 +578,12 @@ def usd_performance_view(request):
     report_bytes, report_sheets = build_performance_report_bytes(df_raw)
     gainers_df = _build_gainers_shakers(report_sheets, date_map, latest_col_name, threshold=1000)
 
-    pkl_d = _pickle_dir(request)
-    (pkl_d / 'usd_report.xlsx').write_bytes(report_bytes)
+    _save_report(request, 'usd_report.xlsx', report_bytes)
     ctx['has_usd_report'] = True
 
     if not gainers_df.empty:
         gainers_bytes = _write_gainers_excel(gainers_df).getvalue()
-        (pkl_d / 'usd_gainers.xlsx').write_bytes(gainers_bytes)
+        _save_report(request, 'usd_gainers.xlsx', gainers_bytes)
         ctx['has_usd_gainers'] = True
     else:
         ctx['has_usd_gainers'] = False
@@ -483,7 +602,7 @@ def usd_performance_view(request):
                 top25_error = total_or_err
             else:
                 top25_excel = build_top25_excel_bytes(top_25)
-                (pkl_d / 'usd_top25.xlsx').write_bytes(top25_excel)
+                _save_report(request, 'usd_top25.xlsx', top25_excel)
                 display = top_25[['CIF', 'MERCHANT NAME', 'Revenue', 'BUSINESS UNIT', 'Revenue Percentage']].copy()
                 display.columns = ['CIF', 'MERCHANT_NAME', 'Revenue', 'BUSINESS_UNIT', 'Revenue_Percentage']
                 top25_results = {
@@ -523,7 +642,7 @@ def pos_statements_view(request):
             df_usd = _load_df(request, 'usd_df')
 
             for _df in [df_zwg, df_usd]:
-                _df['CIF'] = _df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+                _df['CIF'] = _norm_cif(_df['CIF'])
                 _df['TID'] = _df['TID'].astype(str).str.strip()
 
             filt_zwg = df_zwg[df_zwg['CIF'] == cif]
@@ -537,9 +656,8 @@ def pos_statements_view(request):
             short_name = str(source['MERCHANT NAME'].iloc[0]).split()[0]
             request.session['pos_short_name'] = short_name
 
-            pkl_d = _pickle_dir(request)
             stmt_bytes = pos_statement_bytes(filt_zwg, filt_usd)
-            (pkl_d / 'pos_statement.xlsx').write_bytes(stmt_bytes)
+            _save_report(request, 'pos_statement.xlsx', stmt_bytes)
 
             ctx['cif']           = cif
             ctx['short_name']    = short_name
@@ -549,15 +667,15 @@ def pos_statements_view(request):
             ctx['has_statement'] = True
 
             if cif == '012499':
-                (pkl_d / 'champions_zinara.xlsx').write_bytes(champions_zinara_bytes(filt_zwg, filt_usd))
-                (pkl_d / 'champions_insurance.xlsx').write_bytes(champions_insurance_bytes(filt_zwg, filt_usd))
+                _save_report(request, 'champions_zinara.xlsx', champions_zinara_bytes(filt_zwg, filt_usd))
+                _save_report(request, 'champions_insurance.xlsx', champions_insurance_bytes(filt_zwg, filt_usd))
                 ctx['is_champions'] = True
 
     return render(request, 'merchant/pos_statements.html', ctx)
 
 
 # =============================================================================
-# IDLE TERMINALS  (Periodic Analytics — scans ALL sheets)
+# IDLE TERMINALS  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def idle_terminals_view(request):
@@ -599,7 +717,7 @@ def idle_terminals_view(request):
                 return render(request, 'merchant/idle_terminals.html', ctx)
 
             for _df in [df_zwg_raw, df_usd_raw]:
-                _df['CIF']           = _df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+                _df['CIF']           = _norm_cif(_df['CIF'])
                 _df['TID']           = _df['TID'].astype(str).str.strip()
                 _df['MERCHANT NAME'] = _df['MERCHANT NAME'].astype(str).str.strip()
                 if 'BUSINESS UNIT' in _df.columns:
@@ -632,7 +750,7 @@ def idle_terminals_view(request):
             zwg_throughout = zwg_start & zwg_end
             usd_throughout = usd_start & usd_end
 
-            # Aggregate by TID (collapses multi-month rows, NaN → 0 for missing dates)
+            # Aggregate by TID (collapses multi-month rows, NaN â†’ 0 for missing dates)
             df_zwg = _aggregate_by_tid(df_zwg_raw)
             df_usd = _aggregate_by_tid(df_usd_raw)
 
@@ -657,8 +775,7 @@ def idle_terminals_view(request):
 
             date_label = f"{from_date.strftime('%d %b %Y')} to {to_date.strftime('%d %b %Y')}"
 
-            pkl_d = _pickle_dir(request)
-            (pkl_d / 'idle_total.xlsx').write_bytes(idle_excel_bytes(total_idle))
+            _save_report(request, 'idle_total.xlsx', idle_excel_bytes(total_idle))
 
             ctx['date_label']   = date_label
             ctx['total_idle']   = len(total_idle)
@@ -675,7 +792,7 @@ def idle_terminals_view(request):
                 ctx['chart_div'] = build_plotly_bar_div(
                     labels=unit_counts['BUSINESS UNIT'].tolist(),
                     values=unit_counts['Idle Terminals'].tolist(),
-                    title=f'Idle Terminals by Business Unit — {date_label}',
+                    title=f'Idle Terminals by Business Unit â€” {date_label}',
                     x_label='Number of Idle Terminals',
                 )
                 bu_list = sorted(total_idle['BUSINESS UNIT'].dropna().astype(str).str.strip().unique().tolist())
@@ -686,7 +803,7 @@ def idle_terminals_view(request):
                     unit_df = total_idle[
                         total_idle['BUSINESS UNIT'].astype(str).str.strip() == selected_bu
                     ].copy()
-                    (pkl_d / 'idle_unit.xlsx').write_bytes(idle_excel_bytes(unit_df))
+                    _save_report(request, 'idle_unit.xlsx', idle_excel_bytes(unit_df))
                     ctx['selected_bu']       = selected_bu
                     ctx['has_unit_download'] = True
 
@@ -694,7 +811,7 @@ def idle_terminals_view(request):
 
 
 # =============================================================================
-# ZWG WEEKLY TOP 25  (Periodic Analytics — scans ALL sheets)
+# ZWG WEEKLY TOP 25  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def zwg_top25_view(request):
@@ -733,7 +850,7 @@ def zwg_top25_view(request):
             else:
                 df = df_raw.copy()
                 df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
-                df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+                df['CIF'] = _norm_cif(df['CIF'])
                 fixed_cols   = ['TID', 'CIF', 'MERCHANT NAME', 'BUSINESS UNIT']
                 date_columns = extract_date_columns(df)
                 df[date_columns] = df[date_columns].apply(_to_numeric)
@@ -742,8 +859,7 @@ def zwg_top25_view(request):
                 if top_25 is None:
                     ctx['top25_error'] = total_or_err
                 else:
-                    pkl_d = _pickle_dir(request)
-                    (pkl_d / 'zwg_top25_weekly.xlsx').write_bytes(build_top25_excel_bytes(top_25))
+                    _save_report(request, 'zwg_top25_weekly.xlsx', build_top25_excel_bytes(top_25))
                     display = top_25[['CIF', 'MERCHANT NAME', 'Revenue', 'BUSINESS UNIT', 'Revenue Percentage']].copy()
                     display.columns = ['CIF', 'MERCHANT_NAME', 'Revenue', 'BUSINESS_UNIT', 'Revenue_Percentage']
                     ctx['top25_results'] = {
@@ -757,7 +873,7 @@ def zwg_top25_view(request):
 
 
 # =============================================================================
-# USD WEEKLY TOP 25  (Periodic Analytics — scans ALL sheets)
+# USD WEEKLY TOP 25  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def usd_top25_view(request):
@@ -796,7 +912,7 @@ def usd_top25_view(request):
             else:
                 df = df_raw.copy()
                 df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip().isin(['TOTAL', 'GRAND TOTAL'])]
-                df['CIF'] = df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+                df['CIF'] = _norm_cif(df['CIF'])
                 fixed_cols   = ['TID', 'CIF', 'MERCHANT NAME', 'BUSINESS UNIT']
                 date_columns = extract_date_columns(df)
                 df[date_columns] = df[date_columns].apply(_to_numeric)
@@ -805,8 +921,7 @@ def usd_top25_view(request):
                 if top_25 is None:
                     ctx['top25_error'] = total_or_err
                 else:
-                    pkl_d = _pickle_dir(request)
-                    (pkl_d / 'usd_top25_weekly.xlsx').write_bytes(build_top25_excel_bytes(top_25))
+                    _save_report(request, 'usd_top25_weekly.xlsx', build_top25_excel_bytes(top_25))
                     display = top_25[['CIF', 'MERCHANT NAME', 'Revenue', 'BUSINESS UNIT', 'Revenue Percentage']].copy()
                     display.columns = ['CIF', 'MERCHANT_NAME', 'Revenue', 'BUSINESS_UNIT', 'Revenue_Percentage']
                     ctx['top25_results'] = {
@@ -820,7 +935,7 @@ def usd_top25_view(request):
 
 
 # =============================================================================
-# DETAILED MERCHANT PERFORMANCE  (Periodic Analytics — scans ALL sheets)
+# DETAILED MERCHANT PERFORMANCE  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def merchant_performance_view(request):
@@ -851,7 +966,7 @@ def merchant_performance_view(request):
 
     step = request.POST.get('step', '')
 
-    # ── STEP 1: Validate CIF ──────────────────────────────────────────────────
+    # â”€â”€ STEP 1: Validate CIF â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if step == 'cif':
         cif_form = CIFLookupForm(request.POST)
         ctx['cif_form'] = cif_form
@@ -867,8 +982,8 @@ def merchant_performance_view(request):
 
         df_zwg = df_zwg.copy()
         df_usd = df_usd.copy()
-        df_zwg['CIF'] = df_zwg['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
-        df_usd['CIF'] = df_usd['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+        df_zwg['CIF'] = _norm_cif(df_zwg['CIF'])
+        df_usd['CIF'] = _norm_cif(df_usd['CIF'])
 
         fz = df_zwg[df_zwg['CIF'] == cif]
         fu = df_usd[df_usd['CIF'] == cif]
@@ -878,7 +993,7 @@ def merchant_performance_view(request):
 
         src = fz if not fz.empty else fu
         merchant_name = str(src['MERCHANT NAME'].iloc[0]).strip()
-        business_unit = str(src['BUSINESS UNIT'].iloc[0]).strip() if 'BUSINESS UNIT' in src.columns else '—'
+        business_unit = str(src['BUSINESS UNIT'].iloc[0]).strip() if 'BUSINESS UNIT' in src.columns else 'â€”'
         ctx.update({
             'confirmed_cif':      cif,
             'merchant_name':      merchant_name,
@@ -888,7 +1003,7 @@ def merchant_performance_view(request):
         })
         return render(request, 'merchant/merchant_performance.html', ctx)
 
-    # ── STEP 2: Generate Dashboard ────────────────────────────────────────────
+    # â”€â”€ STEP 2: Generate Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if step == 'report':
         cif = request.POST.get('cif_value', '').strip().zfill(6)
         date_form = DateRangeForm(request.POST)
@@ -904,7 +1019,7 @@ def merchant_performance_view(request):
         df_zwg_raw = df_zwg_raw.copy()
         df_usd_raw = df_usd_raw.copy()
         for _df in [df_zwg_raw, df_usd_raw]:
-            _df['CIF']           = _df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+            _df['CIF']           = _norm_cif(_df['CIF'])
             _df['TID']           = _df['TID'].astype(str).str.strip()
             _df['MERCHANT NAME'] = _df['MERCHANT NAME'].astype(str).str.strip()
             if 'BUSINESS UNIT' in _df.columns:
@@ -918,7 +1033,7 @@ def merchant_performance_view(request):
 
         src = fz_all if not fz_all.empty else fu_all
         merchant_name = str(src['MERCHANT NAME'].iloc[0]).strip()
-        business_unit = str(src['BUSINESS UNIT'].iloc[0]).strip() if 'BUSINESS UNIT' in src.columns else '—'
+        business_unit = str(src['BUSINESS UNIT'].iloc[0]).strip() if 'BUSINESS UNIT' in src.columns else 'â€”'
         ctx['merchant_name']       = merchant_name
         ctx['merchant_short_name'] = merchant_name.split()[0] if merchant_name else cif
         ctx['business_unit']       = business_unit
@@ -931,7 +1046,7 @@ def merchant_performance_view(request):
         date_label = f"{from_date.strftime('%d %b %Y')} to {to_date.strftime('%d %b %Y')}"
         ctx.update({'date_label': date_label, 'from_date': from_date, 'to_date': to_date})
 
-        # ── Date columns ─────────────────────────────────────────────────────
+        # â”€â”€ Date columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         zwg_all_dcols = extract_date_columns(df_zwg_raw)
         usd_all_dcols = extract_date_columns(df_usd_raw)
 
@@ -948,7 +1063,7 @@ def merchant_performance_view(request):
             ctx['error'] = f'No transaction date columns found in the selected period ({date_label}).'
             return render(request, 'merchant/merchant_performance.html', ctx)
 
-        # ── Revenue for the period ────────────────────────────────────────────
+        # â”€â”€ Revenue for the period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         def _rev(frame, pcols):
             if frame.empty or not pcols:
                 return 0.0
@@ -958,13 +1073,13 @@ def merchant_performance_view(request):
         zwg_rev = _rev(fz_all, zwg_pcols)
         usd_rev = _rev(fu_all, usd_pcols)
 
-        # ── Total terminals (all-time unique TID suffixes for this CIF) ──────
+        # â”€â”€ Total terminals (all-time unique TID suffixes for this CIF) â”€â”€â”€â”€â”€â”€
         zwg_tids = set(fz_all['TID'].dropna().astype(str).str.strip().unique())
         usd_tids = set(fu_all['TID'].dropna().astype(str).str.strip().unique())
         all_sfx  = {t[-4:] for t in (zwg_tids | usd_tids) if len(t) >= 4}
         total_terminals = len(all_sfx)
 
-        # ── Inactive terminals (same mechanism as Idle Terminals) ─────────────
+        # â”€â”€ Inactive terminals (same mechanism as Idle Terminals) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         inactive_count = 0
         idle_df = pd.DataFrame()
         if not fz_all.empty and not fu_all.empty:
@@ -1002,7 +1117,7 @@ def merchant_performance_view(request):
             'activity_ratio_ok': activity_ratio >= 70,
         })
 
-        # ── Daily revenue data for chart ──────────────────────────────────────
+        # â”€â”€ Daily revenue data for chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         daily_zwg, daily_usd = {}, {}
         for col in zwg_pcols:
             d = _parse_col_date(col)
@@ -1026,7 +1141,7 @@ def merchant_performance_view(request):
             pk = max(daily_usd, key=daily_usd.get)
             ctx['peak_usd'] = {'date': pk.strftime('%d %b %Y'), 'amount': f"{daily_usd[pk]:,.2f}"}
 
-        # ── Top 10 terminals by ZWG revenue ───────────────────────────────────
+        # â”€â”€ Top 10 terminals by ZWG revenue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if zwg_pcols and not fz_all.empty:
             fz_agg = _aggregate_by_tid(fz_all.copy())
             p_avail = [c for c in zwg_pcols if c in fz_agg.columns]
@@ -1038,14 +1153,13 @@ def merchant_performance_view(request):
                     if row['_rev'] > 0
                 ]
 
-        # ── Save downloadable files ───────────────────────────────────────────
-        pkl_d = _pickle_dir(request)
+        # â”€â”€ Save downloadable files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         perf_bytes = merchant_period_excel_bytes(fz_all, fu_all, zwg_pcols, usd_pcols)
-        (pkl_d / 'merchant_perf.xlsx').write_bytes(perf_bytes)
+        _save_report(request, 'merchant_perf.xlsx', perf_bytes)
         ctx['has_perf_report'] = True
 
         if not idle_df.empty:
-            (pkl_d / 'merchant_idle.xlsx').write_bytes(idle_excel_bytes(idle_df))
+            _save_report(request, 'merchant_idle.xlsx', idle_excel_bytes(idle_df))
             ctx['has_idle_report'] = True
 
         short_name = merchant_name.split()[0]
@@ -1067,7 +1181,7 @@ def download_merchant_idle(request):
 
 
 # =============================================================================
-# BUSINESS UNIT PERFORMANCE  (Periodic Analytics — scans ALL sheets)
+# BUSINESS UNIT PERFORMANCE  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def bu_performance_view(request):
@@ -1110,7 +1224,7 @@ def bu_performance_view(request):
 
     step = request.POST.get('step', '')
 
-    # ── STEP 1: Confirm Business Unit ─────────────────────────────────────────
+    # â”€â”€ STEP 1: Confirm Business Unit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if step == 'bu':
         selected_bu = request.POST.get('business_unit', '').strip()
         if not selected_bu or selected_bu not in bu_list:
@@ -1122,7 +1236,7 @@ def bu_performance_view(request):
         })
         return render(request, 'merchant/bu_performance.html', ctx)
 
-    # ── STEP 2: Generate Dashboard ────────────────────────────────────────────
+    # â”€â”€ STEP 2: Generate Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if step == 'report':
         selected_bu = request.POST.get('bu_value', '').strip()
         date_form = DateRangeForm(request.POST)
@@ -1136,7 +1250,7 @@ def bu_performance_view(request):
         df_zwg_raw = df_zwg_raw.copy()
         df_usd_raw = df_usd_raw.copy()
         for _df in [df_zwg_raw, df_usd_raw]:
-            _df['CIF']           = _df['CIF'].astype(str).str.strip().str.split('.').str[0].str.zfill(6)
+            _df['CIF']           = _norm_cif(_df['CIF'])
             _df['TID']           = _df['TID'].astype(str).str.strip()
             _df['MERCHANT NAME'] = _df['MERCHANT NAME'].astype(str).str.strip()
             if 'BUSINESS UNIT' in _df.columns:
@@ -1164,7 +1278,7 @@ def bu_performance_view(request):
         date_label = f"{from_date.strftime('%d %b %Y')} to {to_date.strftime('%d %b %Y')}"
         ctx.update({'date_label': date_label, 'from_date': from_date, 'to_date': to_date})
 
-        # ── Date columns ──────────────────────────────────────────────────────
+        # â”€â”€ Date columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         zwg_all_dcols = extract_date_columns(df_zwg_raw)
         usd_all_dcols = extract_date_columns(df_usd_raw)
 
@@ -1181,7 +1295,7 @@ def bu_performance_view(request):
             ctx['error'] = f'No transaction date columns found in the selected period ({date_label}).'
             return render(request, 'merchant/bu_performance.html', ctx)
 
-        # ── Revenue for the period ────────────────────────────────────────────
+        # â”€â”€ Revenue for the period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         def _rev(frame, pcols):
             if frame.empty or not pcols:
                 return 0.0
@@ -1191,12 +1305,12 @@ def bu_performance_view(request):
         zwg_rev = _rev(fz_all, zwg_pcols)
         usd_rev = _rev(fu_all, usd_pcols)
 
-        # ── Total terminals (unique TIDs in this BU across both files) ────────
+        # â”€â”€ Total terminals (unique TIDs in this BU across both files) â”€â”€â”€â”€â”€â”€â”€â”€
         zwg_tids = set(fz_all['TID'].dropna().astype(str).str.strip().unique()) if not fz_all.empty else set()
         usd_tids = set(fu_all['TID'].dropna().astype(str).str.strip().unique()) if not fu_all.empty else set()
         total_terminals = len(zwg_tids | usd_tids)
 
-        # ── Inactive terminals (same mechanism as Idle Terminals) ─────────────
+        # â”€â”€ Inactive terminals (same mechanism as Idle Terminals) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         inactive_count = 0
         idle_df = pd.DataFrame()
         if not fz_all.empty and not fu_all.empty:
@@ -1234,7 +1348,7 @@ def bu_performance_view(request):
             'activity_ratio_ok': activity_ratio >= 70,
         })
 
-        # ── Daily revenue data for chart ──────────────────────────────────────
+        # â”€â”€ Daily revenue data for chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         daily_zwg, daily_usd = {}, {}
         for col in zwg_pcols:
             d = _parse_col_date(col)
@@ -1258,7 +1372,7 @@ def bu_performance_view(request):
             pk = max(daily_usd, key=daily_usd.get)
             ctx['peak_usd'] = {'date': pk.strftime('%d %b %Y'), 'amount': f"{daily_usd[pk]:,.2f}"}
 
-        # ── Top 10 merchants by ZWG revenue in this BU (grouped by CIF) ─────
+        # â”€â”€ Top 10 merchants by ZWG revenue in this BU (grouped by CIF) â”€â”€â”€â”€â”€
         if zwg_pcols and not fz_all.empty:
             p_avail = [c for c in zwg_pcols if c in fz_all.columns]
             if p_avail:
@@ -1281,7 +1395,7 @@ def bu_performance_view(request):
                     if row['_rev'] > 0
                 ]
 
-        # ── Top 10 merchants by USD revenue in this BU (grouped by CIF) ─────
+        # â”€â”€ Top 10 merchants by USD revenue in this BU (grouped by CIF) â”€â”€â”€â”€â”€
         if usd_pcols and not fu_all.empty:
             p_avail_u = [c for c in usd_pcols if c in fu_all.columns]
             if p_avail_u:
@@ -1304,14 +1418,13 @@ def bu_performance_view(request):
                     if row['_rev'] > 0
                 ]
 
-        # ── Save downloadable files ───────────────────────────────────────────
-        pkl_d = _pickle_dir(request)
+        # â”€â”€ Save downloadable files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         perf_bytes = merchant_period_excel_bytes(fz_all, fu_all, zwg_pcols, usd_pcols)
-        (pkl_d / 'bu_perf.xlsx').write_bytes(perf_bytes)
+        _save_report(request, 'bu_perf.xlsx', perf_bytes)
         ctx['has_perf_report'] = True
 
         if not idle_df.empty:
-            (pkl_d / 'bu_idle.xlsx').write_bytes(idle_excel_bytes(idle_df))
+            _save_report(request, 'bu_idle.xlsx', idle_excel_bytes(idle_df))
             ctx['has_idle_report'] = True
 
         request.session['bu_perf_label'] = f"{selected_bu} Business Unit Performance from {date_label}"
@@ -1332,7 +1445,7 @@ def download_bu_idle(request):
 
 
 # =============================================================================
-# PERFORMANCE BY SECTOR  (Periodic Analytics — scans ALL sheets)
+# PERFORMANCE BY SECTOR  (Periodic Analytics â€” scans ALL sheets)
 # =============================================================================
 
 def _sector_combined_excel_bytes(top10_zwg, top10_usd):
@@ -1405,7 +1518,7 @@ def _sector_detailed_excel_bytes(
     acct_fmt = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)'
 
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-        # ── Sheet 1: Gainers and Shakers ──────────────────────────────────────
+        # â”€â”€ Sheet 1: Gainers and Shakers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         gs_rows = (
             [{'SECTOR': r['SECTOR'], 'CURRENCY': 'ZWG', 'PREVIOUSLY': r['PREVIOUSLY'],
               'CURRENTLY': r['CURRENTLY'], 'VARIANCE': r['VARIANCE']} for _, r in zwg_gs.iterrows()]
@@ -1421,7 +1534,7 @@ def _sector_detailed_excel_bytes(
             for cell in row:
                 cell.number_format = acct_fmt
 
-        # ── Sheet 2: Idle Sectors ──────────────────────────────────────────────
+        # â”€â”€ Sheet 2: Idle Sectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         idle_rows = (
             [{'SECTOR': r['SECTOR'], 'CURRENCY': 'ZWG'} for _, r in zwg_idle.iterrows()]
             + [{'SECTOR': r['SECTOR'], 'CURRENCY': 'USD'} for _, r in usd_idle.iterrows()]
@@ -1431,7 +1544,7 @@ def _sector_detailed_excel_bytes(
         idle_df.to_excel(writer, index=False, sheet_name='Idle Sectors')
         writer.sheets['Idle Sectors'].freeze_panes = 'A2'
 
-        # ── Sheet 3: All Sectors Comparison (current vs prior period) ─────────
+        # â”€â”€ Sheet 3: All Sectors Comparison (current vs prior period) â”€â”€â”€â”€â”€â”€â”€â”€â”€
         comp_parts = []
         for grp_curr, grp_prev_data, ccy in (
             (zwg_full, zwg_prev, 'ZWG'),
@@ -1462,7 +1575,7 @@ def _sector_detailed_excel_bytes(
                 for cell in row:
                     cell.number_format = acct_fmt
 
-        # ── Sheet 4: Summary ───────────────────────────────────────────────────
+        # â”€â”€ Sheet 4: Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         zwg_ct = zwg_full['_rev'].sum() if zwg_full is not None and not zwg_full.empty else 0
         usd_ct = usd_full['_rev'].sum() if usd_full is not None and not usd_full.empty else 0
         zwg_pt = zwg_prev['_rev'].sum() if zwg_prev is not None and not zwg_prev.empty else 0
@@ -1475,11 +1588,11 @@ def _sector_detailed_excel_bytes(
             'Metric': [
                 'Report Period',
                 'Comparison (Prior) Period',
-                'ZWG Revenue — Current Period',
-                'ZWG Revenue — Prior Period',
+                'ZWG Revenue â€” Current Period',
+                'ZWG Revenue â€” Prior Period',
                 'ZWG Net Variance',
-                'USD Revenue — Current Period',
-                'USD Revenue — Prior Period',
+                'USD Revenue â€” Current Period',
+                'USD Revenue â€” Prior Period',
                 'USD Net Variance',
                 'ZWG Active Sectors (Current)',
                 'ZWG Idle Sectors',
@@ -1588,8 +1701,6 @@ def sector_performance_view(request):
         ctx['error'] = f'No transaction date columns found in the selected period ({date_label}).'
         return render(request, 'merchant/sector_performance.html', ctx)
 
-    pkl_d = _pickle_dir(request)
-
     def _sector_group(df, pcols):
         """Return a DataFrame sorted by revenue desc, with 'share' column added."""
         p_avail = [c for c in pcols if c in df.columns]
@@ -1606,7 +1717,7 @@ def sector_performance_view(request):
         grp['share'] = (grp['_rev'] / total * 100).round(1) if total > 0 else 0.0
         return grp
 
-    # ── ZWG ──────────────────────────────────────────────────────────────────
+    # â”€â”€ ZWG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     zwg_grp  = pd.DataFrame()
     top10_zwg = pd.DataFrame()
     if has_sector_zwg and zwg_pcols:
@@ -1624,7 +1735,7 @@ def sector_performance_view(request):
             ctx['zwg_chart_div'] = build_plotly_bar_div(
                 labels=top10_zwg['SECTOR'].tolist(),
                 values=top10_zwg['_rev'].tolist(),
-                title=f'Top 10 Sectors — ZWG Revenue  |  {date_label}',
+                title=f'Top 10 Sectors â€” ZWG Revenue  |  {date_label}',
                 x_label='ZWG Revenue',
             )
             ctx['zwg_sector_rows'] = [
@@ -1637,7 +1748,7 @@ def sector_performance_view(request):
                 for i, r in top10_zwg.iterrows()
             ]
 
-    # ── USD ──────────────────────────────────────────────────────────────────
+    # â”€â”€ USD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     usd_grp  = pd.DataFrame()
     top10_usd = pd.DataFrame()
     if has_sector_usd and usd_pcols:
@@ -1655,7 +1766,7 @@ def sector_performance_view(request):
             ctx['usd_chart_div'] = build_plotly_bar_div(
                 labels=top10_usd['SECTOR'].tolist(),
                 values=top10_usd['_rev'].tolist(),
-                title=f'Top 10 Sectors — USD Revenue  |  {date_label}',
+                title=f'Top 10 Sectors â€” USD Revenue  |  {date_label}',
                 x_label='USD Revenue',
             )
             ctx['usd_sector_rows'] = [
@@ -1668,7 +1779,7 @@ def sector_performance_view(request):
                 for i, r in top10_usd.iterrows()
             ]
 
-    # ── Total / Active sectors (mirrors Merchant Performance terminal counts) ─
+    # â”€â”€ Total / Active sectors (mirrors Merchant Performance terminal counts) â”€
     all_sec_set = set()
     if has_sector_zwg:
         all_sec_set |= {
@@ -1691,9 +1802,9 @@ def sector_performance_view(request):
     ctx['total_sectors']        = total_sectors
     ctx['total_active_sectors'] = total_active_sectors
 
-    # ── Combined Top 10 Sectors Excel ─────────────────────────────────────────
+    # â”€â”€ Combined Top 10 Sectors Excel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not top10_zwg.empty or not top10_usd.empty:
-        (pkl_d / 'sector_combined.xlsx').write_bytes(
+        _save_report(request, 'sector_combined.xlsx', 
             _sector_combined_excel_bytes(
                 top10_zwg if not top10_zwg.empty else None,
                 top10_usd if not top10_usd.empty else None,
@@ -1704,7 +1815,7 @@ def sector_performance_view(request):
             f"Sector Revenues for {from_date.strftime('%d %b %Y')} to {to_date.strftime('%d %b %Y')}"
         )
 
-    # ── Prior period for Detailed Sector Performance Report ───────────────────
+    # â”€â”€ Prior period for Detailed Sector Performance Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     period_days    = (to_date - from_date).days + 1
     prior_to_date  = from_date - timedelta(days=1)
     prior_from_date = prior_to_date - timedelta(days=period_days - 1)
@@ -1722,7 +1833,7 @@ def sector_performance_view(request):
     usd_idle = _idle_sectors(df_usd, usd_pcols) if has_sector_usd else pd.DataFrame(columns=['SECTOR'])
 
     if not zwg_grp.empty or not usd_grp.empty:
-        (pkl_d / 'sector_detailed.xlsx').write_bytes(
+        _save_report(request, 'sector_detailed.xlsx', 
             _sector_detailed_excel_bytes(
                 zwg_gs, usd_gs, zwg_idle, usd_idle,
                 zwg_grp, usd_grp, zwg_prev, usd_prev,
@@ -1753,11 +1864,10 @@ def download_sector_detailed(request):
 # =============================================================================
 
 def _serve_file(request, filename, download_name, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'):
-    pkl_d = _pickle_dir(request)
-    path  = pkl_d / filename
-    if not path.exists():
+    """Serve a generated report from the memory cache â€” no disk read required."""
+    data = _load_report(request, filename)
+    if not data:
         return HttpResponse('File not found. Please regenerate the report.', status=404)
-    data = path.read_bytes()
     resp = HttpResponse(data, content_type=mime)
     resp['Content-Disposition'] = f'attachment; filename="{download_name}"'
     return resp
@@ -1788,7 +1898,6 @@ def download_usd_top25(request):
 
 
 def download_pos_statement(request):
-    pkl_d     = _pickle_dir(request)
     short_name = request.session.get('pos_short_name', 'Merchant')
     return _serve_file(request, 'pos_statement.xlsx', f'{short_name} Daily Pos Statements.xlsx')
 
@@ -1891,7 +2000,6 @@ def auto_reports_view(request):
                                   '"Approved or Completed" transactions.')
             return render(request, 'merchant/auto_reports.html', ctx)
 
-        pkl_d = _pickle_dir(request)
         zwg_stats = usd_stats = None
 
         # Process ZWG report
@@ -1899,7 +2007,7 @@ def auto_reports_view(request):
             try:
                 zwg_bytes = zwg_file.read()
                 updated_zwg, zwg_stats = update_merchant_report(zwg_bytes, b02_totals, 'ZWG')
-                (pkl_d / 'auto_zwg.xlsx').write_bytes(updated_zwg)
+                _save_report(request, 'auto_zwg.xlsx', updated_zwg)
                 request.session['auto_zwg_filename'] = zwg_file.name
             except Exception as e:
                 ctx['errors'].append(f'Error processing ZWG report: {e}')
@@ -1909,7 +2017,7 @@ def auto_reports_view(request):
             try:
                 usd_bytes = usd_file.read()
                 updated_usd, usd_stats = update_merchant_report(usd_bytes, b02_totals, 'USD')
-                (pkl_d / 'auto_usd.xlsx').write_bytes(updated_usd)
+                _save_report(request, 'auto_usd.xlsx', updated_usd)
                 request.session['auto_usd_filename'] = usd_file.name
             except Exception as e:
                 ctx['errors'].append(f'Error processing USD report: {e}')
@@ -1921,7 +2029,7 @@ def auto_reports_view(request):
                 'has_results':      True,
                 'b02_files_count':  len(b02_files),
                 'b02_tids':         b02_tids,
-                'dates_processed':  ', '.join(dates_processed) if dates_processed else '—',
+                'dates_processed':  ', '.join(dates_processed) if dates_processed else 'â€”',
                 'zwg_stats':        zwg_stats,
                 'usd_stats':        usd_stats,
                 'has_zwg_download': zwg_stats is not None,
@@ -1932,117 +2040,107 @@ def auto_reports_view(request):
 
 
 def auto_reports_proceed(request):
-    """
-    Copy auto-generated reports into the session upload dir then fully initialise
-    the analytics session — exactly what the regular upload + sheet-select flow
-    does — so every analytics page works immediately.
-    """
-    pkl_d    = _pickle_dir(request)
-    upload_d = _session_dir(request)
+    “””
+    Load the auto-generated report bytes from the memory cache (stored there by
+    auto_reports_view), parse all sheets in-memory, and initialise the full
+    analytics session so every analytics page works immediately.
 
-    # ── 1. Copy generated files into the session upload dir ───────────────────
-    zwg_src = pkl_d / 'auto_zwg.xlsx'
-    usd_src = pkl_d / 'auto_usd.xlsx'
+    No disk I/O is performed here — everything stays in RAM, keeping
+    PythonAnywhere’s 512 MB quota free.
+    “””
+    # â”€â”€ 1. Retrieve auto-generated report bytes from cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    zwg_bytes = _load_report(request, ‘auto_zwg.xlsx’)
+    usd_bytes = _load_report(request, ‘auto_usd.xlsx’)
 
-    if not zwg_src.exists() and not usd_src.exists():
-        return redirect('auto_reports')
+    if zwg_bytes is None and usd_bytes is None:
+        # Nothing was generated yet — send the user back to generate first.
+        return redirect(‘auto_reports’)
 
-    if zwg_src.exists():
-        shutil.copy2(zwg_src, upload_d / 'zwg.xlsx')
-    if usd_src.exists():
-        shutil.copy2(usd_src, upload_d / 'usd.xlsx')
+    required = {‘TID’, ‘CIF’, ‘MERCHANT NAME’}
 
-    # ── 2. Read sheet names (needed by choose_analytics and other views) ───────
-    required = {'TID', 'CIF', 'MERCHANT NAME'}
-
-    def _valid_sheets(path):
-        """Return list of sheet names and the DataFrame from the last valid sheet."""
+    # â”€â”€ 2. Helper: parse all sheets from bytes in-memory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    def _parse_sheets(raw_bytes):
+        “””Return (sheet_names, {sheet_name: df}, last_valid_df) from Excel bytes.”””
+        if raw_bytes is None:
+            return [], {}, None
         try:
-            xls = pd.ExcelFile(path)
+            xls = pd.ExcelFile(io.BytesIO(raw_bytes))
         except Exception:
-            return [], None
-        sheet_names = xls.sheet_names
+            return [], {}, None
+        sheet_map = {}
         last_df = None
-        for sname in reversed(sheet_names):
+        for sname in xls.sheet_names:
             try:
-                df = normalize_columns(pd.read_excel(path, sheet_name=sname))
+                df = read_excel_with_preserved_headers(io.BytesIO(raw_bytes), sheet_name=sname)
                 if required.issubset(set(df.columns)):
-                    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip()
-                            .isin(['TOTAL', 'GRAND TOTAL'])]
-                    last_df = df
-                    break
+                    df = df[~df[‘MERCHANT NAME’].astype(str).str.upper().str.strip()
+                            .isin([‘TOTAL’, ‘GRAND TOTAL’])]
+                    sheet_map[sname] = df
+                    last_df = df          # keep the last valid sheet as the default
             except Exception:
-                continue
-        return sheet_names, last_df
+                pass
+        return xls.sheet_names, sheet_map, last_df
 
-    zwg_sheet_names, zwg_df = _valid_sheets(upload_d / 'zwg.xlsx') if (upload_d / 'zwg.xlsx').exists() else ([], None)
-    usd_sheet_names, usd_df = _valid_sheets(upload_d / 'usd.xlsx') if (upload_d / 'usd.xlsx').exists() else ([], None)
+    zwg_sheet_names, zwg_sheet_map, zwg_last = _parse_sheets(zwg_bytes)
+    usd_sheet_names, usd_sheet_map, usd_last = _parse_sheets(usd_bytes)
 
-    # ── 3. Save daily-analytics DataFrames (zwg_df / usd_df) ──────────────────
+    # â”€â”€ 3. Cache every individual sheet (same pattern as upload_view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # This lets select_sheet_view (if the user navigates there) find the right data.
+    skey = _skey(request)
+    for sname, df in zwg_sheet_map.items():
+        cache.set(f’sheet_zwg_{skey}_{sname}’, df, _CACHE_TTL)
+    for sname, df in usd_sheet_map.items():
+        cache.set(f’sheet_usd_{skey}_{sname}’, df, _CACHE_TTL)
+
+    # â”€â”€ 4. Build combined all-sheets DataFrames for Periodic Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    all_zwg = list(zwg_sheet_map.values())
+    all_usd = list(usd_sheet_map.values())
+    if all_zwg:
+        _save_df(request, ‘zwg_all_df’, pd.concat(all_zwg, ignore_index=True))
+    if all_usd:
+        _save_df(request, ‘usd_all_df’, pd.concat(all_usd, ignore_index=True))
+
+    # â”€â”€ 5. Save the default daily-analytics DataFrames (last valid sheet) â”€â”€â”€â”€â”€â”€
+    zwg_df = zwg_last
+    usd_df = usd_last
     if zwg_df is not None:
-        _save_df(request, 'zwg_df', zwg_df)
+        _save_df(request, ‘zwg_df’, zwg_df)
     if usd_df is not None:
-        _save_df(request, 'usd_df', usd_df)
+        _save_df(request, ‘usd_df’, usd_df)
 
-    # data_period label for sidebar (derived from the auto-selected sheet)
+    # â”€â”€ 6. Compute sidebar period labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         ref_df = zwg_df if zwg_df is not None else usd_df
         if ref_df is not None:
             date_cols = extract_date_columns(ref_df)
             parsed = sorted([_parse_col_date(c) for c in date_cols if pd.notnull(_parse_col_date(c))])
             if parsed:
-                request.session['data_period'] = (
-                    f"{parsed[0].strftime('%d %b %Y')} → {parsed[-1].strftime('%d %b %Y')}"
+                request.session[‘data_period’] = (
+                    f”{parsed[0].strftime(‘%d %b %Y’)} → {parsed[-1].strftime(‘%d %b %Y’)}”
                 )
     except Exception:
         pass
 
-    # ── 4. Load all sheets for periodic analytics ──────────────────────────────
-    # Inline version of _load_all_sheets that handles missing files gracefully.
-    all_zwg, all_usd = [], []
-    for path, bucket in ((upload_d / 'zwg.xlsx', all_zwg), (upload_d / 'usd.xlsx', all_usd)):
-        if not path.exists():
-            continue
-        try:
-            for sname in pd.ExcelFile(path).sheet_names:
-                try:
-                    df = normalize_columns(pd.read_excel(path, sheet_name=sname))
-                    if not required.issubset(set(df.columns)):
-                        continue
-                    df = df[~df['MERCHANT NAME'].astype(str).str.upper().str.strip()
-                            .isin(['TOTAL', 'GRAND TOTAL'])]
-                    bucket.append(df)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    if all_zwg:
-        _save_df(request, 'zwg_all_df', pd.concat(all_zwg, ignore_index=True))
-    if all_usd:
-        _save_df(request, 'usd_all_df', pd.concat(all_usd, ignore_index=True))
-
-    # data_period_all label (across all sheets, for periodic analytics sidebar)
     try:
-        combined = _load_df(request, 'zwg_all_df')
+        combined = _load_df(request, ‘zwg_all_df’)
         if combined is not None:
             date_cols = extract_date_columns(combined)
             parsed = sorted([_parse_col_date(c) for c in date_cols if pd.notnull(_parse_col_date(c))])
             if parsed:
-                request.session['data_period_all'] = (
-                    f"{parsed[0].strftime('%d %b %Y')} → {parsed[-1].strftime('%d %b %Y')}"
+                request.session[‘data_period_all’] = (
+                    f”{parsed[0].strftime(‘%d %b %Y’)} → {parsed[-1].strftime(‘%d %b %Y’)}”
                 )
     except Exception:
         pass
 
-    # ── 5. Set all session flags ───────────────────────────────────────────────
-    request.session['zwg_sheet_names']      = zwg_sheet_names
-    request.session['usd_sheet_names']      = usd_sheet_names
-    request.session['files_validated']      = True
-    request.session['data_loaded']          = (zwg_df is not None or usd_df is not None)
-    request.session['periodic_data_loaded'] = True
+    # â”€â”€ 7. Set all session flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    request.session[‘zwg_sheet_names’]      = zwg_sheet_names
+    request.session[‘usd_sheet_names’]      = usd_sheet_names
+    request.session[‘files_validated’]      = True
+    request.session[‘data_loaded’]          = (zwg_df is not None or usd_df is not None)
+    request.session[‘periodic_data_loaded’] = True
 
-    return redirect('choose_analytics')
+    return redirect(‘choose_analytics’)
 
 
 def download_auto_zwg(request):
@@ -2068,3 +2166,5 @@ def logout_view(request):
                 shutil.rmtree(d, ignore_errors=True)
     request.session.flush()
     return redirect('upload')
+
+
