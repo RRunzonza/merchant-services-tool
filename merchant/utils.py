@@ -188,13 +188,16 @@ def _to_numeric(series):
 
 
 def _write_formatted_sheet(writer, df, sheet_name):
-    workbook   = writer.book
-    num_fmt    = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)'
-    data_fmt   = workbook.add_format({'num_format': num_fmt})
-    total_fmt  = workbook.add_format({'num_format': num_fmt, 'bold': True, 'top': 1, 'bottom': 6})
-    label_fmt  = workbook.add_format({'bold': True, 'top': 1, 'bottom': 6})
-    border_fmt = workbook.add_format({'top': 1, 'bottom': 6})
-    header_fmt = workbook.add_format({'bold': True, 'bottom': 1})
+    import datetime as _dt
+    workbook      = writer.book
+    num_fmt       = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)'
+    data_fmt      = workbook.add_format({'num_format': num_fmt})
+    total_fmt     = workbook.add_format({'num_format': num_fmt, 'bold': True, 'top': 1, 'bottom': 6})
+    label_fmt     = workbook.add_format({'bold': True, 'top': 1, 'bottom': 6})
+    border_fmt    = workbook.add_format({'top': 1, 'bottom': 6})
+    header_fmt    = workbook.add_format({'bold': True, 'bottom': 1})
+    # Date headers written as real Excel dates so Excel never shows green triangles
+    date_hdr_fmt  = workbook.add_format({'bold': True, 'bottom': 1, 'num_format': 'DD-MMM-YY'})
 
     def _is_financial(col_name):
         return str(col_name).upper() == 'TOTAL' or pd.notnull(_parse_col_date(col_name))
@@ -211,12 +214,15 @@ def _write_formatted_sheet(writer, df, sheet_name):
 
     clean.to_excel(writer, index=False, sheet_name=sheet_name)
     ws = writer.sheets[sheet_name]
-
     ws.freeze_panes(1, 0)
-    ws.ignore_errors({'number_stored_as_text': 'A1:XFD1'})
 
     for ci, col_name in enumerate(clean.columns):
-        ws.write(0, ci, str(col_name), header_fmt)
+        parsed = _parse_col_date(col_name)
+        if pd.notnull(parsed):
+            # Write as a real Excel date value — eliminates green triangles permanently
+            ws.write_datetime(0, ci, parsed.to_pydatetime().replace(tzinfo=None), date_hdr_fmt)
+        else:
+            ws.write(0, ci, str(col_name), header_fmt)
 
     for ci in fin_idx:
         for ri, val in enumerate(clean[clean.columns[ci]]):
