@@ -213,6 +213,7 @@ def _write_formatted_sheet(writer, df, sheet_name):
     ws = writer.sheets[sheet_name]
 
     ws.freeze_panes(1, 0)
+    ws.ignore_errors({'number_stored_as_text': 'A1:XFD1'})
 
     for ci, col_name in enumerate(clean.columns):
         ws.write(0, ci, str(col_name), header_fmt)
@@ -250,6 +251,7 @@ def _write_gainers_excel(gainers_df):
         ws = writer.sheets['Gainers and Shakers']
 
         ws.freeze_panes(1, 0)
+        ws.ignore_errors({'number_stored_as_text': 'A1:XFD1'})
 
         for ci, hdr in enumerate(cols):
             ws.write(0, ci, hdr, hdr_fmt)
